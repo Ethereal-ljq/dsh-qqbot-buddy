@@ -1,0 +1,17 @@
+# 依赖与构建产物
+node_modules/
+*.tgz
+
+# 运行时数据（bot 的 cwd 指向仓库时会产生）
+memory/
+stickers/
+persona.md
+settings.json
+
+# 测试产物
+test/artifacts/
+test/e2e/artifacts/
+
+# 编辑器 / 系统
+.DS_Store
+*.log

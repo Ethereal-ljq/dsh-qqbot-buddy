@@ -1,0 +1,42 @@
+# dsh-qqbot-buddy bundle patch
+#
+# 通过 `dsh plugin --profile <name> add <本包路径或包名>` 安装后，dsh 启动时自动叠加本 patch。
+# 本插件是官方 @tencent-connect/dsh-qqbot 的替代实现：默认停用 im-qqbot。
+#
+# appId / appSecret 二选一：写在这里，或安装时导出 QQBOT_APPID / QQBOT_SECRET 环境变量。
+# 注意：本文件是包内模板；实际部署建议由 scripts/deploy-live.sh 把凭据写进 profile 的
+# cordis.patch.yml，避免把 secret 提交到包仓库。
+
+# ── 插入 qqbot-buddy 插件行 ──
+# 说明：本插件不依赖官方 @tencent-connect/dsh-qqbot；凭据可留空走扫码绑定，
+# 或在 profile 的 cordis.patch.yml 里用 `- id: qqbot-buddy` 覆盖 appId/appSecret/cwd。
+- insert:
+    - id: qqbot-buddy
+      name: dsh-qqbot-buddy
+      config:
+        appId: ''
+        appSecret: ''
+        cwd: ''
+        preset: qqbot-buddy
+        debug: false
+
+# ── 插入 qqbot-buddy agent preset：只负责 compaction ──
+# fs/fs-search/web 与全局工具白名单由插件在创建 agent 时按 settings.features 动态装配，
+# 因此 preset 保持最小、稳定，不随功能开关变化。
+- insert:
+    - id: preset-qqbot-buddy
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: qqbot-buddy
+        order: 11
+        plugins:
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'

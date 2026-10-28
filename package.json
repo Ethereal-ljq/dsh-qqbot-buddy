@@ -1,0 +1,94 @@
+{
+  "name": "dsh-qqbot-buddy",
+  "version": "0.7.2",
+  "description": "把 DeepSeek Harness (dsh) 接到 QQ 的机器人插件：人设、回复节奏、长期记忆、表情包、看图、扫码绑定与完整设置页。",
+  "type": "module",
+  "license": "MIT",
+  "author": "Ethereal-ljq",
+  "homepage": "https://github.com/Ethereal-ljq/dsh-qqbot-buddy#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ethereal-ljq/dsh-qqbot-buddy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Ethereal-ljq/dsh-qqbot-buddy/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "qq",
+    "qqbot",
+    "plugin",
+    "bundle",
+    "agent",
+    "chatbot"
+  ],
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "dsh-qqbot-buddy-install": "./scripts/install.mjs"
+  },
+  "files": [
+    "lib/**",
+    "client/**",
+    "cordis.patch.yml",
+    "README.md",
+    "DESIGN.md",
+    "LICENSE",
+    "scripts/install.mjs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "engines": {
+    "node": ">=20.3.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "install-local": "bash scripts/install-local.sh",
+    "install-plugin": "node scripts/install.mjs"
+  },
+  "dependencies": {
+    "@tencent-connect/qqbot-connector": "1.2.0",
+    "@tencent-connect/qqbot-nodejs": "^1.0.5",
+    "js-yaml": "^4.1.0",
+    "qrcode": "^1.5.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-agent": "*",
+    "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-session": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  }
+}
