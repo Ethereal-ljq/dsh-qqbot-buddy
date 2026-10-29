@@ -174,12 +174,39 @@ window.__ModuleLoader__.load({
       return body === null ? { ok: true } : body;
     }
 
-    function apiGet(url) {
-      return requestJson("GET", url);
+    // ── 当前机器人（多机器人 v0.16） ───────────────────────────
+    /**
+     * 设置页当前查看的机器人 id。空串 = 不指定，服务端按 activeBotId 处理
+     * （旧版服务端没有 /bots 接口时保持空串，等价于单机器人）。
+     */
+    let currentBotId = "";
+
+    /** 给 GET URL 追加 botId；botId 显式传 null 表示不带（/bots 等管理接口）。 */
+    function withBotQuery(url, botId) {
+      const id = botId === undefined ? currentBotId : botId;
+      if (typeof id !== "string" || id === "") return url;
+      const sep = url.indexOf("?") === -1 ? "?" : "&";
+      return url + sep + "botId=" + encodeURIComponent(id);
     }
 
-    function apiPost(url, payload) {
-      return requestJson("POST", url, payload === undefined ? {} : payload);
+    /**
+     * 给 POST body 补 botId；已有 botId 不覆盖（/bots/activate 里 body.botId 是目标机器人）。
+     * botId 显式传 null 表示不补（/bots/create、/bots/delete 等）。
+     */
+    function withBotBody(payload, botId) {
+      const id = botId === undefined ? currentBotId : botId;
+      const body = payload === undefined || payload === null ? {} : payload;
+      if (typeof id !== "string" || id === "" || typeof body !== "object" || Array.isArray(body)) return body;
+      if (body.botId !== undefined && body.botId !== "") return body;
+      return Object.assign({}, body, { botId: id });
+    }
+
+    function apiGet(url, botId) {
+      return requestJson("GET", withBotQuery(url, botId));
+    }
+
+    async function apiPost(url, payload, botId) {
+      return requestJson("POST", url, withBotBody(payload, botId));
     }
 
     /**
@@ -382,6 +409,14 @@ window.__ModuleLoader__.load({
       ".qqb-cap-row > .qqb-field { flex: 1; min-width: 0; }",
       ".qqb-cap-row > .qqb-btn { flex: none; opacity: 0.75; }",
       ".qqb-cap-row > .qqb-btn:hover:not(:disabled) { opacity: 1; }",
+      // 机器人选择器（页头小控件：名称 + 连接状态点 + 管理入口；窄屏自动换行）
+      ".qqb-bot-pick { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }",
+      ".qqb-bot-pick .qqb-select { width: auto; max-width: 190px; padding: 2px 8px; font-size: 12px; line-height: 18px; }",
+      ".qqb-bot-dot { flex: none; width: 7px; height: 7px; border-radius: 999px; background: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      ".qqb-bot-dot--ok { background: var(--dsw-alias-state-success-primary, #1a7f37); }",
+      ".qqb-bot-dot--warn { background: var(--dsw-alias-state-warn-primary, #9a6700); }",
+      // 知识库 / 群友库列表行：标题下面挂标签与元信息
+      ".qqb-list-item--stack { align-items: flex-start; }",
       "@media (max-width: 640px) { .qqb-grid-2 { grid-template-columns: 1fr; } .qqb-select { max-width: none; } }",
     ].join("\n");
 
@@ -760,10 +795,12 @@ window.__ModuleLoader__.load({
       const bindRef = react.useRef(null);
       const reloadRef = react.useRef(props.reload);
       reloadRef.current = props.reload;
+      // 指定机器人时（多机器人页里给某个机器人绑定），所有绑定请求都显式带它的 botId
+      const targetBotId = props.botId === undefined ? undefined : props.botId;
 
       const load = react.useCallback(async function () {
         try {
-          const result = await requestRaw(API + "/bind/state");
+          const result = await requestRaw(withBotQuery(API + "/bind/state", targetBotId));
           if (result.status === 404) {
             // bind-routes.js 未加载：降级为手动填写表单
             bindRef.current = null;
@@ -786,7 +823,12 @@ window.__ModuleLoader__.load({
           setPhaseError("");
           // 绑定成功：刷新 /api/state（appId / ready 展示）并提示已写入 profile
           if (result.body.phase === "bound" && (!previous || previous.phase !== "bound")) {
-            setStatus({ state: "saved", message: "绑定成功，凭据已写入 profile（重启 DSH 后仍有效）" });
+            setStatus({
+              state: "saved",
+              message: targetBotId === undefined
+                ? "绑定成功，凭据已写入 profile（重启 DSH 后仍有效）"
+                : "绑定成功，凭据已写入该机器人的凭据文件（重启 DSH 后仍有效）",
+            });
             if (typeof reloadRef.current === "function") void reloadRef.current();
           }
         } catch (error) {
@@ -826,7 +868,7 @@ window.__ModuleLoader__.load({
 
       function refreshQr() {
         void runAction(async function () {
-          await apiPost(API + "/bind/refresh", {});
+          await apiPost(API + "/bind/refresh", {}, targetBotId);
         }, "已刷新绑定二维码");
       }
 
@@ -838,7 +880,7 @@ window.__ModuleLoader__.load({
           return;
         }
         void runAction(async function () {
-          await apiPost(API + "/bind/manual", { appId: appId, appSecret: appSecret });
+          await apiPost(API + "/bind/manual", { appId: appId, appSecret: appSecret }, targetBotId);
           setAppSecretInput("");
           setManualOpen(false);
         }, "凭据已保存，绑定流程已启动");
@@ -847,7 +889,7 @@ window.__ModuleLoader__.load({
       function doUnbind() {
         if (typeof window !== "undefined" && !window.confirm("确定解绑当前 QQ 机器人吗？解绑后会立即下线并重新生成绑定二维码。")) return;
         void runAction(async function () {
-          await apiPost(API + "/bind/unbind", {});
+          await apiPost(API + "/bind/unbind", {}, targetBotId);
         }, "已解绑，正在生成新的绑定二维码");
       }
 
@@ -887,7 +929,13 @@ window.__ModuleLoader__.load({
             { type: "button", className: "qqb-btn qqb-btn--primary", disabled: busy, onClick: submitManual },
             busy ? "正在保存…" : "保存并绑定",
           ),
-          h("span", { className: "qqb-help" }, "凭据写入 profile 的 cordis.patch.yml（原子写 + 0600），重启后仍有效"),
+          h(
+            "span",
+            { className: "qqb-help" },
+            targetBotId === undefined
+              ? "凭据写入当前机器人的 credentials.json（原子写 + 0600），重启后仍有效"
+              : "凭据写入该机器人的 credentials.json（原子写 + 0600），重启后仍有效",
+          ),
         ),
       );
 
@@ -897,7 +945,13 @@ window.__ModuleLoader__.load({
           "div",
           { className: "qqb-bind" },
           h("div", { className: "qqb-kv" }, kvRow("AppID", bind.appId || "—"), kvRow("状态", "已绑定")),
-          h("p", { className: "qqb-help" }, "凭据已写入 profile（cordis.patch.yml），重启 DSH 后仍然有效。"),
+          h(
+            "p",
+            { className: "qqb-help" },
+            targetBotId === undefined
+              ? "凭据已写入当前机器人的 credentials.json（0600），重启 DSH 后仍然有效。"
+              : "凭据已写入该机器人的 credentials.json（0600），重启 DSH 后仍然有效。",
+          ),
           h(
             "div",
             { className: "qqb-toolbar" },
@@ -3555,9 +3609,39 @@ window.__ModuleLoader__.load({
         [previewPrompt],
       );
 
+      // 相关性召回（v0.16）：设置项在下方「相关性召回」卡片里编辑，这里管理预览状态
+      const [recallText, setRecallText] = react.useState("");
+      const [recallScope, setRecallScope] = react.useState("group");
+      const [recallGroupId, setRecallGroupId] = react.useState("");
+      const [recallPreview, setRecallPreview] = react.useState(null);
+      const [recallError, setRecallError] = react.useState("");
+      const [recallBusy, setRecallBusy] = react.useState(false);
+      const runRecallPreview = react.useCallback(
+        async function () {
+          if (recallBusy) return;
+          setRecallBusy(true);
+          setRecallError("");
+          try {
+            const params =
+              "text=" + encodeURIComponent(recallText.trim()) +
+              "&scope=" + encodeURIComponent(recallScope) +
+              "&groupId=" + encodeURIComponent(recallGroupId.trim());
+            const data = await apiGet(API + "/recall/preview?" + params);
+            setRecallPreview(data);
+          } catch (error) {
+            setRecallPreview(null);
+            setRecallError(msgOf(error));
+          } finally {
+            setRecallBusy(false);
+          }
+        },
+        [recallBusy, recallText, recallScope, recallGroupId],
+      );
+
       if (!settings) return h(LoadingBlock, { text: "正在加载自我改进设置…" });
 
       const auto = draft.autoCollect || {};
+      const recall = draft.recall || {};
       const dirty = !sameJSON(draft, memorySettings);
       const files = layout && Array.isArray(layout.files) ? layout.files : [];
       const fileDirty = currentFile !== null && fileText !== currentFile.original;
@@ -3572,6 +3656,14 @@ window.__ModuleLoader__.load({
         setDraft(function (prev) {
           const base = prev.autoCollect || {};
           return Object.assign({}, prev, { autoCollect: Object.assign({}, base, partial) });
+        });
+      }
+
+      /** 修改相关性召回参数（settings.memory.recall）。 */
+      function patchRecall(partial) {
+        setDraft(function (prev) {
+          const base = prev.recall || {};
+          return Object.assign({}, prev, { recall: Object.assign({}, base, partial) });
         });
       }
 
@@ -3715,6 +3807,154 @@ window.__ModuleLoader__.load({
             },
           }),
           h(SaveBar, { dirty: dirty, status: settingsStatus, onSave: saveSettings, note: "记忆设置有未保存的修改" }),
+        ),
+        h(
+          Card,
+          { title: "相关性召回", hint: "每轮按当前消息检索记忆 / 知识 / 群友，只注入相关的几条（必要时涌现）" },
+          h(Switch, {
+            label: "启用相关性召回",
+            help: "关闭后只按固定字符数注入 MEMORY.md；开启后按相关度挑选条目（设置立即生效）",
+            checked: recall.enabled !== false,
+            onChange: function (value) {
+              patchRecall({ enabled: value });
+            },
+          }),
+          h(
+            "div",
+            { className: "qqb-grid-2" },
+            h(NumberField, {
+              label: "每轮最多条数",
+              help: "1-30，默认 6",
+              value: recall.maxItems,
+              min: 1,
+              max: 30,
+              step: 1,
+              onChange: function (value) {
+                patchRecall({ maxItems: value });
+              },
+            }),
+            h(NumberField, {
+              label: "注入字数上限",
+              help: "100-10000，默认 1200",
+              value: recall.maxChars,
+              min: 100,
+              max: 10000,
+              step: 100,
+              onChange: function (value) {
+                patchRecall({ maxChars: value });
+              },
+            }),
+            h(NumberField, {
+              label: "时间衰减半衰期（天）",
+              help: "0.5-3650，默认 30；越新的记忆越容易被选中",
+              value: recall.recencyHalfLifeDays,
+              min: 0.5,
+              max: 3650,
+              step: 0.5,
+              onChange: function (value) {
+                patchRecall({ recencyHalfLifeDays: value });
+              },
+            }),
+            h(NumberField, {
+              label: "重要度权重",
+              help: "0-10，默认 2；越大越优先高重要度的条目",
+              value: recall.importanceWeight,
+              min: 0,
+              max: 10,
+              step: 0.5,
+              onChange: function (value) {
+                patchRecall({ importanceWeight: value });
+              },
+            }),
+            h(NumberField, {
+              label: "最低相关度分数",
+              help: "0-1，默认 0.15；低于此分数不注入",
+              value: recall.minScore,
+              min: 0,
+              max: 1,
+              step: 0.05,
+              onChange: function (value) {
+                patchRecall({ minScore: value });
+              },
+            }),
+          ),
+          h(SaveBar, { dirty: dirty, status: settingsStatus, onSave: saveSettings, note: "相关性召回设置有未保存的修改" }),
+          h(
+            "div",
+            { className: "qqb-prompt-note" },
+            h(
+              "p",
+              { className: "qqb-help" },
+              "立即预览：用一段消息文本模拟一次召回，看这轮会注入什么（只读，不写入记忆）。",
+            ),
+            h(
+              "div",
+              { className: "qqb-grid-2" },
+              h(TextField, {
+                label: "消息文本",
+                value: recallText,
+                placeholder: "例如：明天几点开黑？",
+                onChange: setRecallText,
+              }),
+              h(ChoiceGroup, {
+                label: "场景",
+                value: recallScope,
+                options: [
+                  { value: "group", label: "群聊" },
+                  { value: "direct", label: "私聊" },
+                ],
+                onChange: setRecallScope,
+              }),
+            ),
+            h(TextField, {
+              label: "群号（可选）",
+              help: "按群过滤群友与知识条目；私聊可留空",
+              value: recallGroupId,
+              mono: true,
+              onChange: setRecallGroupId,
+            }),
+            h(
+              "div",
+              { className: "qqb-toolbar" },
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "qqb-btn qqb-btn--sm",
+                  disabled: recallBusy,
+                  onClick: function () {
+                    void runRecallPreview();
+                  },
+                },
+                recallBusy ? "检索中…" : "立即预览",
+              ),
+              recallPreview && recallPreview.counts
+                ? h(
+                    "span",
+                    { className: "qqb-help" },
+                    "记忆 " + (recallPreview.counts.memory || 0) +
+                      " · 知识 " + (recallPreview.counts.knowledge || 0) +
+                      " · 群友 " + (recallPreview.counts.members || 0),
+                  )
+                : null,
+            ),
+            recallError
+              ? h(
+                  "p",
+                  { className: "qqb-note qqb-note--err" },
+                  "预览失败：" + recallError + "（旧版服务端可能没有 /recall/preview 接口）",
+                )
+              : null,
+            recallPreview
+              ? h(
+                  "pre",
+                  { className: "qqb-pre" },
+                  typeof recallPreview.block === "string" && recallPreview.block !== ""
+                    ? recallPreview.block
+                    : "（本次没有可注入的相关内容）",
+                )
+              : null,
+          ),
         ),
         h(
           Card,
@@ -4871,6 +5111,1787 @@ window.__ModuleLoader__.load({
       );
     }
 
+    // ── 多机器人（v0.16 新增） ────────────────────────────────
+    /** 机器人管理接口（显式传 botId，不跟随「当前查看」自动补全）。 */
+    const BOTS_API = {
+      list: API + "/bots",
+      create: API + "/bots/create",
+      update: API + "/bots/update",
+      delete: API + "/bots/delete",
+      activate: API + "/bots/activate",
+    };
+
+    /** 机器人连接状态文案 / 徽标样式。 */
+    function botStateText(bot) {
+      if (!bot) return "未知";
+      if (bot.ready === true) return "已连接";
+      if (typeof bot.appId === "string" && bot.appId !== "") return "未连接";
+      return "未绑定凭据";
+    }
+
+    function botStateClass(bot) {
+      if (!bot) return "qqb-badge--off";
+      if (bot.ready === true) return "qqb-badge--ok";
+      return typeof bot.appId === "string" && bot.appId !== "" ? "qqb-badge--warn" : "qqb-badge--off";
+    }
+
+    /** 条目作用域与重要度的中文文案。 */
+    const SCOPE_LABELS = { global: "全局", group: "指定群", c2c: "私聊" };
+    function scopeLabel(value) {
+      return SCOPE_LABELS[value] || "全局";
+    }
+    const IMPORTANCE_LABELS = ["普通", "留意", "重要", "关键"];
+    function importanceOf(value) {
+      const n = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 0;
+      return Math.max(0, Math.min(3, n));
+    }
+    function importanceLabel(value) {
+      return "重要度·" + IMPORTANCE_LABELS[importanceOf(value)];
+    }
+
+    /** openid / id 的短码展示（太长时只留尾部）。 */
+    function shortCode(value, tail) {
+      const textValue = typeof value === "string" ? value : "";
+      if (textValue === "") return "—";
+      const size = typeof tail === "number" && tail > 0 ? tail : 8;
+      return textValue.length <= 12 ? textValue : "…" + textValue.slice(-size);
+    }
+
+    /** 路径末尾斜杠归一（只做展示与比较，不解析 . / ..）。 */
+    function normalizePathText(value) {
+      let textValue = String(value === undefined || value === null ? "" : value).trim();
+      while (textValue.length > 1 && textValue.charAt(textValue.length - 1) === "/") {
+        textValue = textValue.slice(0, -1);
+      }
+      return textValue;
+    }
+
+    /** target 是否在 root 内（纯文本前缀比较，够用且不引入依赖）。 */
+    function pathWithinText(root, target) {
+      const r = normalizePathText(root);
+      const t = normalizePathText(target);
+      if (r === "" || t === "") return true;
+      return t === r || t.indexOf(r + "/") === 0;
+    }
+
+    /** 把接口返回的 tags 归一成 [{tag,count}]（兼容字符串数组）。 */
+    function tagRowsOf(value) {
+      const out = [];
+      for (const item of Array.isArray(value) ? value : []) {
+        if (typeof item === "string") {
+          if (item.trim() !== "") out.push({ tag: item.trim(), count: 0 });
+          continue;
+        }
+        if (!item || typeof item !== "object") continue;
+        const tag = typeof item.tag === "string" ? item.tag : typeof item.name === "string" ? item.name : "";
+        if (tag.trim() === "") continue;
+        out.push({ tag: tag.trim(), count: typeof item.count === "number" ? item.count : 0 });
+      }
+      return out;
+    }
+
+    /** 把接口返回的 groups 归一成 [{id,name,count}]（兼容 {groupId}）。 */
+    function groupRowsOf(value) {
+      const out = [];
+      for (const item of Array.isArray(value) ? value : []) {
+        if (typeof item === "string") {
+          if (item.trim() !== "") out.push({ id: item.trim(), name: "", count: 0 });
+          continue;
+        }
+        if (!item || typeof item !== "object") continue;
+        const id = typeof item.id === "string" ? item.id : typeof item.groupId === "string" ? item.groupId : "";
+        if (id.trim() === "") continue;
+        out.push({
+          id: id.trim(),
+          name: typeof item.name === "string" ? item.name : "",
+          count: typeof item.count === "number" ? item.count : 0,
+        });
+      }
+      return out;
+    }
+
+    /** 时间归一：毫秒数或 ISO 字符串 → 毫秒（失败 0）。 */
+    function timeMsOf(value) {
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string" && value.trim() !== "") {
+        const ms = Date.parse(value);
+        return Number.isFinite(ms) ? ms : 0;
+      }
+      return 0;
+    }
+
+    /**
+     * 群友条目归一。接口返回（members/list）字段为
+     * {id,openid,name,aliases,tags,importance,note,groups:[{groupId,name,messageCount,lastSeenAt}],lastSeenAt,messageCount}；
+     * 同时兼容 meta.groups 映射（直连 store 的旧形态）。
+     */
+    function memberViewOf(item) {
+      const raw = item && typeof item === "object" ? item : {};
+      const meta = raw.meta && typeof raw.meta === "object" ? raw.meta : {};
+      const groupRows = [];
+      if (Array.isArray(raw.groups)) {
+        for (const row of raw.groups) {
+          if (!row || typeof row !== "object") continue;
+          const id = typeof row.groupId === "string" ? row.groupId : typeof row.id === "string" ? row.id : "";
+          if (id === "") continue;
+          groupRows.push({
+            id: id,
+            name: typeof row.name === "string" ? row.name : "",
+            count: typeof row.messageCount === "number" ? row.messageCount : typeof row.count === "number" ? row.count : 0,
+            lastSeenAt: timeMsOf(row.lastSeenAt),
+          });
+        }
+      } else if (meta.groups && typeof meta.groups === "object") {
+        for (const groupId of Object.keys(meta.groups)) {
+          const entry = meta.groups[groupId] && typeof meta.groups[groupId] === "object" ? meta.groups[groupId] : {};
+          groupRows.push({
+            id: groupId,
+            name: typeof entry.name === "string" ? entry.name : "",
+            count: typeof entry.messageCount === "number" ? entry.messageCount : 0,
+            lastSeenAt: timeMsOf(entry.lastSeenAt),
+          });
+        }
+      }
+      if (groupRows.length === 0 && typeof raw.groupId === "string" && raw.groupId !== "") {
+        groupRows.push({ id: raw.groupId, name: "", count: 0, lastSeenAt: 0 });
+      }
+      let messageCount = typeof raw.messageCount === "number" ? raw.messageCount : 0;
+      if (messageCount === 0) {
+        for (const row of groupRows) messageCount += row.count;
+      }
+      let lastSeenAt = timeMsOf(raw.lastSeenAt);
+      for (const row of groupRows) {
+        if (row.lastSeenAt > lastSeenAt) lastSeenAt = row.lastSeenAt;
+      }
+      const aliases = Array.isArray(raw.aliases)
+        ? raw.aliases
+        : Array.isArray(meta.aliases)
+          ? meta.aliases
+          : [];
+      return {
+        id: typeof raw.id === "string" ? raw.id : "",
+        name: typeof raw.name === "string" && raw.name !== "" ? raw.name : typeof meta.name === "string" ? meta.name : "",
+        openid: typeof raw.openid === "string" ? raw.openid : typeof meta.openid === "string" ? meta.openid : "",
+        aliases: aliases.filter(function (value) {
+          return typeof value === "string";
+        }),
+        notes:
+          typeof raw.notes === "string"
+            ? raw.notes
+            : typeof raw.note === "string"
+              ? raw.note
+              : typeof raw.body === "string"
+                ? raw.body
+                : "",
+        tags: Array.isArray(raw.tags) ? raw.tags.filter(function (value) { return typeof value === "string"; }) : [],
+        importance: importanceOf(raw.importance),
+        messageCount: messageCount,
+        lastSeenAt: lastSeenAt,
+        groupRows: groupRows,
+      };
+    }
+
+    /** 插件在工作区里产生的文件（工作区页的“会产生哪些文件”）。 */
+    const BOT_WORKSPACE_FILES = [
+      { rel: "persona.md", desc: "人设正文（提示词最前面的一段）" },
+      { rel: "memory/", desc: "MEMORY.md、index.json、notes/（长期记忆）" },
+      { rel: "knowledge/", desc: "知识条目 markdown + index.json" },
+      { rel: "members/", desc: "群友画像 markdown + index.json" },
+      { rel: "stickers/", desc: "收藏的表情包文件" },
+      { rel: ".qqbot/state/", desc: "settings.json、credentials.json、会话映射（0600）" },
+      { rel: ".qqbot/media/", desc: "QQ 图片 / 文件下载缓存" },
+    ];
+
+    // ── 机器人管理页（widget: bots） ──────────────────────────
+    function BotsPage(props) {
+      const bots = Array.isArray(props.bots) ? props.bots : null;
+      const currentId =
+        typeof props.botId === "string" && props.botId !== ""
+          ? props.botId
+          : typeof props.activeBotId === "string"
+            ? props.activeBotId
+            : "";
+      const [form, setForm] = react.useState({ name: "", appId: "", appSecret: "", workspaceDir: "" });
+      const [creating, setCreating] = react.useState(false);
+      const [createError, setCreateError] = react.useState("");
+      const [expanded, setExpanded] = react.useState("");
+      const [busy, setBusy] = react.useState("");
+      const [rowStatus, setRowStatus] = react.useState({ state: "idle", message: "", botId: "" });
+
+      const reloadBots = react.useCallback(
+        async function () {
+          if (typeof props.onBotsChanged === "function") await props.onBotsChanged();
+        },
+        [props.onBotsChanged],
+      );
+
+      function notify(text) {
+        if (typeof props.onNotify === "function") props.onNotify(text);
+      }
+
+      function patchForm(partial) {
+        setForm(function (prev) {
+          return Object.assign({}, prev, partial);
+        });
+      }
+
+      /** 行内操作：处理中状态只落在当前机器人那一行。 */
+      async function runRow(botId, task, successMessage) {
+        if (busy !== "") return;
+        setBusy(botId);
+        setRowStatus({ state: "saving", message: "正在处理…", botId: botId });
+        try {
+          await task();
+          setRowStatus({ state: "saved", message: successMessage || "操作成功", botId: botId });
+          await reloadBots();
+          if (typeof props.reload === "function") void props.reload();
+        } catch (error) {
+          setRowStatus({ state: "error", message: msgOf(error), botId: botId });
+        } finally {
+          setBusy("");
+        }
+      }
+
+      async function submitCreate() {
+        if (creating) return;
+        const name = form.name.trim();
+        if (name === "") {
+          setCreateError("请先填写机器人名称");
+          return;
+        }
+        setCreating(true);
+        setCreateError("");
+        try {
+          const payload = { name: name };
+          if (form.appId.trim() !== "") payload.appId = form.appId.trim();
+          if (form.appSecret.trim() !== "") payload.appSecret = form.appSecret.trim();
+          if (form.workspaceDir.trim() !== "") payload.workspaceDir = form.workspaceDir.trim();
+          const data = await apiPost(BOTS_API.create, payload, null);
+          const createdId = data && data.bot && typeof data.bot.id === "string" ? data.bot.id : "";
+          setForm({ name: "", appId: "", appSecret: "", workspaceDir: "" });
+          notify("已创建机器人「" + name + "」");
+          await reloadBots();
+          if (createdId !== "" && typeof props.onSelectBot === "function") props.onSelectBot(createdId);
+        } catch (error) {
+          setCreateError(msgOf(error));
+        } finally {
+          setCreating(false);
+        }
+      }
+
+      if (!bots) {
+        return h(
+          "div",
+          { className: "qqb-page" },
+          h(
+            Card,
+            { title: "多机器人", hint: "服务端接口未就绪" },
+            props.botsDone === false
+              ? h(LoadingBlock, { text: "正在读取机器人列表…" })
+              : h(
+                  "div",
+                  { className: "qqb-field" },
+                  h(
+                    "p",
+                    { className: "qqb-note qqb-note--warn" },
+                    "当前服务端没有 /bots 接口（旧版本插件），仍按单机器人运行。重启 dsh 加载新版插件后，这里会显示机器人列表。",
+                  ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      className: "qqb-btn qqb-btn--sm",
+                      onClick: function () {
+                        void reloadBots();
+                      },
+                    },
+                    "重试读取",
+                  ),
+                ),
+          ),
+        );
+      }
+
+      const createCard = h(
+        Card,
+        { title: "新建机器人", hint: "每个机器人独立工作区；凭据只写该机器人的 credentials.json（0600）" },
+        h(
+          "div",
+          { className: "qqb-grid-2" },
+          h(TextField, {
+            label: "名称",
+            value: form.name,
+            placeholder: "例如：小号 / 群友机器人",
+            onChange: function (value) {
+              patchForm({ name: value });
+            },
+          }),
+          h(TextField, {
+            label: "AppID（可选）",
+            value: form.appId,
+            mono: true,
+            placeholder: "可稍后扫码绑定",
+            onChange: function (value) {
+              patchForm({ appId: value });
+            },
+          }),
+          h(TextField, {
+            label: "AppSecret（可选）",
+            value: form.appSecret,
+            type: "password",
+            placeholder: "可稍后扫码绑定",
+            onChange: function (value) {
+              patchForm({ appSecret: value });
+            },
+          }),
+          h(TextField, {
+            label: "工作区路径（可选）",
+            value: form.workspaceDir,
+            mono: true,
+            placeholder: "留空 = <workspaceRoot>/bots/<id>",
+            onChange: function (value) {
+              patchForm({ workspaceDir: value });
+            },
+          }),
+        ),
+        createError ? h("p", { className: "qqb-note qqb-note--err" }, createError) : null,
+        h(
+          "div",
+          { className: "qqb-toolbar" },
+          h(
+            "button",
+            {
+              type: "button",
+              className: "qqb-btn qqb-btn--primary",
+              disabled: creating,
+              onClick: function () {
+                void submitCreate();
+              },
+            },
+            creating ? "正在创建…" : "创建机器人",
+          ),
+          h("span", { className: "qqb-help" }, "创建后可在下方扫码绑定；绑定成功后该机器人自动上线"),
+        ),
+      );
+
+      const cards = bots.map(function (bot) {
+        const enabled = bot.enabled !== false;
+        const isCurrent = bot.id === currentId;
+        const rowBusy = busy === bot.id;
+        const rowState = rowStatus.botId === bot.id ? rowStatus : null;
+        const isOpen = expanded === bot.id;
+        return h(
+          Card,
+          {
+            key: bot.id,
+            title: (bot.name || bot.id) + (isCurrent ? "（当前查看）" : ""),
+            hint: bot.legacy === true ? "旧版单机器人（沿用原有工作区）" : "工作区机器人",
+          },
+          h(
+            "div",
+            { className: "qqb-kv" },
+            h(
+              "div",
+              { className: "qqb-kv-row", key: "state" },
+              h("span", { className: "qqb-kv-label" }, "连接"),
+              h(
+                "span",
+                { className: "qqb-kv-value" },
+                h("span", { className: "qqb-badge " + botStateClass(bot) }, botStateText(bot)),
+              ),
+            ),
+            kvRow("机器人 id", bot.id),
+            kvRow("AppID", bot.appId || "未绑定"),
+            kvRow("工作区", bot.workspaceDir),
+          ),
+          h(Switch, {
+            label: "启用该机器人",
+            help: "禁用后不启动 QQ 网关，配置与数据保留",
+            checked: enabled,
+            disabled: rowBusy,
+            onChange: function (value) {
+              void runRow(
+                bot.id,
+                function () {
+                  return apiPost(BOTS_API.update, { botId: bot.id, enabled: value }, null);
+                },
+                value ? "已启用该机器人" : "已禁用该机器人",
+              );
+            },
+          }),
+          h(StatusLine, { status: rowState, dirty: false }),
+          h(
+            "div",
+            { className: "qqb-toolbar" },
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm",
+                disabled: rowBusy || isCurrent,
+                onClick: function () {
+                  if (typeof props.onSelectBot === "function") props.onSelectBot(bot.id);
+                },
+              },
+              "切换查看",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm",
+                disabled: rowBusy,
+                onClick: function () {
+                  void runRow(
+                    bot.id,
+                    function () {
+                      return apiPost(BOTS_API.activate, { botId: bot.id }, null);
+                    },
+                    "已设为默认机器人（旧接口 / 未指定 botId 时使用）",
+                  );
+                },
+              },
+              "设为默认",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm",
+                disabled: rowBusy,
+                onClick: function () {
+                  setExpanded(isOpen ? "" : bot.id);
+                },
+              },
+              isOpen ? "收起绑定" : "扫码绑定 / 解绑",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm qqb-btn--danger",
+                disabled: rowBusy || bots.length <= 1,
+                title: bots.length <= 1 ? "至少保留一个机器人" : "",
+                onClick: function () {
+                  if (
+                    typeof window !== "undefined" &&
+                    !window.confirm("确定删除机器人「" + (bot.name || bot.id) + "」吗？不会删除工作区文件。")
+                  ) {
+                    return;
+                  }
+                  void runRow(
+                    bot.id,
+                    async function () {
+                      const data = await apiPost(BOTS_API.delete, { botId: bot.id }, null);
+                      const nextActive = data && typeof data.activeBotId === "string" ? data.activeBotId : "";
+                      if (bot.id === currentId && typeof props.onSelectBot === "function") props.onSelectBot(nextActive);
+                    },
+                    "已删除机器人（工作区文件保留）",
+                  );
+                },
+              },
+              "删除",
+            ),
+          ),
+          isOpen ? h(BindingCard, { key: "bind-" + bot.id, botId: bot.id, reload: reloadBots }) : null,
+        );
+      });
+
+      return h(
+        "div",
+        { className: "qqb-page" },
+        h(
+          Card,
+          { title: "当前机器人", hint: "顶部选择器用于切换查看；这里管理全部机器人" },
+          h(
+            "p",
+            { className: "qqb-help" },
+            "每个机器人有独立的工作区（人设 / 记忆 / 知识库 / 群友库 / 表情包）与独立凭据。顶部切换后，下面所有页面都读写对应机器人的数据。",
+          ),
+        ),
+        createCard,
+        cards,
+      );
+    }
+
+    // ── 工作区与文件页（widget: botWorkspace） ────────────────
+    function BotWorkspacePage(props) {
+      const snapshot = props.snapshot;
+      const settings = snapshot && snapshot.settings ? snapshot.settings : {};
+      const bot = snapshot && snapshot.bot && typeof snapshot.bot === "object" ? snapshot.bot : {};
+      const paths = snapshot && snapshot.paths ? snapshot.paths : {};
+      const bots = Array.isArray(props.bots) ? props.bots : [];
+      const botDirs = bot.dirs && typeof bot.dirs === "object" ? bot.dirs : {};
+
+      const record =
+        bots.filter(function (item) {
+          return item.id === props.botId;
+        })[0] || null;
+      const currentId =
+        typeof props.botId === "string" && props.botId !== ""
+          ? props.botId
+          : typeof bot.id === "string" && bot.id !== ""
+            ? bot.id
+            : typeof props.activeBotId === "string"
+              ? props.activeBotId
+              : "";
+      const recordDirs = record && record.dirs && typeof record.dirs === "object" ? record.dirs : {};
+
+      function dirInfoOf(key) {
+        const fromBot = botDirs[key];
+        if (fromBot && typeof fromBot === "object") return fromBot;
+        const fromRecord = recordDirs[key];
+        if (fromRecord && typeof fromRecord === "object") return fromRecord;
+        return null;
+      }
+
+      const rootEffective =
+        typeof bot.workspaceDir === "string" && bot.workspaceDir !== ""
+          ? bot.workspaceDir
+          : record && typeof record.workspaceDir === "string" && record.workspaceDir !== ""
+            ? record.workspaceDir
+            : typeof paths.cwd === "string"
+              ? paths.cwd
+              : "";
+
+      const overrides = {
+        persona: settings.persona && typeof settings.persona.path === "string" ? settings.persona.path : "",
+        memory: settings.memory && typeof settings.memory.dir === "string" ? settings.memory.dir : "",
+        knowledge: settings.knowledge && typeof settings.knowledge.dir === "string" ? settings.knowledge.dir : "",
+        members: settings.members && typeof settings.members.dir === "string" ? settings.members.dir : "",
+        stickers: settings.stickers && typeof settings.stickers.dir === "string" ? settings.stickers.dir : "",
+      };
+
+      const [rootDraft, setRootDraft] = useDraft(rootEffective);
+      const [draft, setDraft] = useDraft(overrides);
+      const [rootError, setRootError] = react.useState("");
+      const [rootStatus, runRoot] = useSaver(props.reload);
+      const [pathStatus, runPaths] = useSaver(props.reload);
+
+      if (!snapshot) return h(LoadingBlock, { text: "正在读取工作区信息…" });
+
+      const rootForCheck =
+        typeof rootDraft === "string" && rootDraft.trim() !== "" ? rootDraft.trim() : rootEffective;
+
+      function defaultPathOf(key) {
+        // 跟随「正在编辑的工作区根」，保存前也能预览默认位置
+        const root = normalizePathText(rootForCheck);
+        if (root === "") return "";
+        if (key === "persona") return root + "/persona.md";
+        return root + "/" + key;
+      }
+
+      const fieldDefs = [
+        { key: "persona", label: "人设文件", kind: "文件", example: "persona.md" },
+        { key: "memory", label: "长期记忆", kind: "目录", example: "memory" },
+        { key: "knowledge", label: "知识库", kind: "目录", example: "knowledge" },
+        { key: "members", label: "群友库", kind: "目录", example: "members" },
+        { key: "stickers", label: "表情包", kind: "目录", example: "stickers" },
+      ];
+
+      const outsideWarnings = [];
+      for (const def of fieldDefs) {
+        const value = typeof draft[def.key] === "string" && draft[def.key].trim() !== ""
+          ? draft[def.key].trim()
+          : defaultPathOf(def.key);
+        if (value !== "" && !pathWithinText(rootForCheck, value)) outsideWarnings.push(def.label + "：" + value);
+      }
+
+      function patchField(key, value) {
+        setDraft(function (prev) {
+          return Object.assign({}, prev, { [key]: value });
+        });
+      }
+
+      function restoreDefaults() {
+        const next = {};
+        for (const def of fieldDefs) next[def.key] = "";
+        setDraft(next);
+      }
+
+      function saveRoot() {
+        const value = String(rootDraft === undefined || rootDraft === null ? "" : rootDraft).trim();
+        if (value === "") {
+          setRootError("工作区不能为空");
+          return;
+        }
+        if (value.charAt(0) !== "/") {
+          setRootError("工作区必须是绝对路径（以 / 开头）");
+          return;
+        }
+        setRootError("");
+        void runRoot(async function () {
+          await apiPost(BOTS_API.update, { botId: currentId, workspaceDir: value }, null);
+          if (typeof props.onBotsChanged === "function") await props.onBotsChanged();
+        }, "工作区已保存（不会搬移已有文件）");
+      }
+
+      function savePaths() {
+        void runPaths(async function () {
+          await apiPost(API + "/settings", {
+            patch: {
+              persona: { path: draft.persona },
+              memory: { dir: draft.memory },
+              knowledge: { dir: draft.knowledge },
+              members: { dir: draft.members },
+              stickers: { dir: draft.stickers },
+            },
+          });
+          if (typeof props.onBotsChanged === "function") await props.onBotsChanged();
+        }, "子路径已保存");
+      }
+
+      // /bots 接口不可用（旧服务端）时只展示，不提供编辑入口
+      if (bots.length === 0) {
+        return h(
+          "div",
+          { className: "qqb-page" },
+          h(
+            Card,
+            { title: "工作区（只读）", hint: "当前服务端未提供 /bots 接口，多机器人路径编辑不可用" },
+            h(
+              "div",
+              { className: "qqb-kv qqb-mono" },
+              kvRow("工作区", paths.cwd),
+              kvRow("人设", paths.persona),
+              kvRow("记忆", paths.memory),
+              kvRow("表情", paths.stickers),
+              kvRow("状态", paths.stateDir),
+              kvRow("媒体", paths.mediaDir),
+            ),
+            h("p", { className: "qqb-help" }, "重启 dsh 加载新版插件后，这里可以按机器人编辑工作区与子路径。"),
+          ),
+        );
+      }
+
+      const pathsDirty = !sameJSON(draft, overrides);
+      const rootDirty = String(rootDraft === undefined || rootDraft === null ? "" : rootDraft).trim() !== rootEffective;
+
+      const derivedRows = [
+        { key: "stateDir", label: "插件状态", fallback: paths.stateDir },
+        { key: "mediaDir", label: "媒体缓存", fallback: paths.mediaDir },
+      ];
+
+      return h(
+        "div",
+        { className: "qqb-page" },
+        h(
+          Card,
+          { title: "工作区根", hint: currentId === "" ? "" : "机器人 " + currentId },
+          h(TextField, {
+            label: "工作区路径",
+            value: typeof rootDraft === "string" ? rootDraft : "",
+            mono: true,
+            help: "必须是绝对路径；修改只改变指向，不会搬移已有文件。留空或相对路径会被服务端拒绝。",
+            onChange: function (value) {
+              setRootDraft(value);
+            },
+          }),
+          rootError ? h("p", { className: "qqb-note qqb-note--err" }, rootError) : null,
+          h(SaveBar, {
+            dirty: rootDirty,
+            status: rootStatus,
+            onSave: saveRoot,
+            note: "工作区路径有未保存的修改",
+            label: "保存工作区",
+          }),
+        ),
+        h(
+          Card,
+          { title: "子路径", hint: "留空 = 按工作区默认位置；可指向工作区外，但不建议" },
+          h(
+            "div",
+            { className: "qqb-grid-2" },
+            fieldDefs.map(function (def) {
+              const defaultPath = defaultPathOf(def.key);
+              return h(TextField, {
+                key: def.key,
+                label: def.label,
+                value: typeof draft[def.key] === "string" ? draft[def.key] : "",
+                mono: true,
+                placeholder: defaultPath || "工作区默认",
+                help: "默认：" + (defaultPath || "—"),
+                onChange: function (value) {
+                  patchField(def.key, value);
+                },
+              });
+            }),
+          ),
+          outsideWarnings.length > 0
+            ? h(
+                "p",
+                { className: "qqb-note qqb-note--warn" },
+                "以下路径不在工作区内（允许，但迁移 / 备份时容易漏）：" + outsideWarnings.join("；"),
+              )
+            : h("p", { className: "qqb-help" }, "所有路径都在工作区内，迁移时只需搬整个工作区目录。"),
+          h(
+            "div",
+            { className: "qqb-toolbar" },
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm",
+                onClick: restoreDefaults,
+              },
+              "恢复默认",
+            ),
+            h("span", { className: "qqb-help" }, "恢复默认会清空覆盖值，保存后按工作区默认位置解析"),
+          ),
+          h(SaveBar, {
+            dirty: pathsDirty,
+            status: pathStatus,
+            onSave: savePaths,
+            note: "子路径有未保存的修改",
+            label: "保存子路径",
+          }),
+        ),
+        h(
+          Card,
+          { title: "派生路径", hint: "由工作区自动派生，不需要手动配置" },
+          h(
+            "div",
+            { className: "qqb-kv qqb-mono" },
+            derivedRows.map(function (row) {
+              const info = dirInfoOf(row.key);
+              const value =
+                info && typeof info.path === "string" && info.path !== ""
+                  ? info.path
+                  : typeof row.fallback === "string"
+                    ? row.fallback
+                    : "";
+              const meta =
+                info === null
+                  ? ""
+                  : info.exists === true
+                    ? "已存在" + (typeof info.entries === "number" && info.entries > 0 ? "（" + info.entries + " 项）" : "")
+                    : "尚未创建";
+              return h(
+                "div",
+                { className: "qqb-kv-row", key: row.key },
+                h("span", { className: "qqb-kv-label" }, row.label),
+                h(
+                  "span",
+                  { className: "qqb-kv-value qqb-mono" },
+                  value || "—",
+                  meta !== "" ? h("span", { className: "qqb-list-meta" }, "  ·  " + meta) : null,
+                ),
+              );
+            }),
+          ),
+        ),
+        h(
+          Card,
+          { title: "插件会在这里产生哪些文件", hint: "迁移 / 备份时搬整个工作区目录即可" },
+          h(
+            "div",
+            { className: "qqb-list" },
+            BOT_WORKSPACE_FILES.map(function (row) {
+              const base = normalizePathText(rootEffective);
+              return h(
+                "div",
+                { className: "qqb-list-item", key: row.rel },
+                h(
+                  "div",
+                  { className: "qqb-list-main" },
+                  h("span", { className: "qqb-mono" }, row.rel),
+                  h("span", { className: "qqb-list-meta" }, row.desc),
+                ),
+                h("span", { className: "qqb-mono qqb-list-meta" }, (base === "" ? "" : base + "/") + row.rel),
+              );
+            }),
+          ),
+        ),
+      );
+    }
+
+    // ── 知识库页（widget: knowledge） ─────────────────────────
+    function KnowledgePage(props) {
+      const [items, setItems] = react.useState([]);
+      const [total, setTotal] = react.useState(0);
+      const [tagSource, setTagSource] = react.useState([]);
+      const [loading, setLoading] = react.useState(true);
+      const [listError, setListError] = react.useState("");
+      const [q, setQ] = react.useState("");
+      const [query, setQuery] = react.useState("");
+      const [scope, setScope] = react.useState("");
+      const [tag, setTag] = react.useState("");
+      const [limit, setLimit] = react.useState(50);
+      const [editor, setEditor] = react.useState(null);
+      const [editorError, setEditorError] = react.useState("");
+      const [editorLoading, setEditorLoading] = react.useState(false);
+      // v0.16.1：审核状态筛选 + 自动提炼
+      const [reviewStatus, setReviewStatus] = react.useState("");
+      const [extracting, setExtracting] = react.useState(false);
+      const [extractNote, setExtractNote] = react.useState("");
+      const [extractError, setExtractError] = react.useState("");
+      const [extractStats, setExtractStats] = react.useState(null);
+      const [extractTranscript, setExtractTranscript] = react.useState("");
+      const [extractScope, setExtractScope] = react.useState("global");
+      const [extractGroupId, setExtractGroupId] = react.useState("");
+
+      const loadList = react.useCallback(async function () {
+        setLoading(true);
+        const params = ["limit=" + String(limit), "offset=0"];
+        if (query !== "") params.push("q=" + encodeURIComponent(query));
+        if (scope !== "") params.push("scope=" + encodeURIComponent(scope));
+        if (tag !== "") params.push("tag=" + encodeURIComponent(tag));
+        if (reviewStatus !== "") params.push("status=" + encodeURIComponent(reviewStatus));
+        try {
+          const data = await apiGet(API + "/knowledge?" + params.join("&"));
+          setItems(Array.isArray(data.items) ? data.items : []);
+          setTotal(typeof data.total === "number" ? data.total : 0);
+          setTagSource(Array.isArray(data.tags) ? data.tags : []);
+          setListError("");
+        } catch (error) {
+          setItems([]);
+          setTotal(0);
+          setListError(msgOf(error));
+        } finally {
+          setLoading(false);
+        }
+      }, [limit, query, scope, tag, reviewStatus]);
+
+      const [status, run] = useSaver(loadList);
+      react.useEffect(
+        function () {
+          void loadList();
+        },
+        [loadList],
+      );
+
+      function patchEditor(partial) {
+        setEditor(function (prev) {
+          return prev ? Object.assign({}, prev, partial) : prev;
+        });
+      }
+
+      /**
+       * 读取条目完整正文（列表摘要里没有 body）。
+       * 读不到时禁止保存：否则空正文会把原内容覆盖掉。
+       */
+      function loadEntryBody(id) {
+        if (typeof id !== "string" || id === "") return;
+        setEditorLoading(true);
+        void (async function () {
+          try {
+            const data = await apiGet(API + "/knowledge/entry?id=" + encodeURIComponent(id));
+            const entry = data && data.entry && typeof data.entry === "object" ? data.entry : {};
+            setEditor(function (prev) {
+              if (!prev || prev.id !== id) return prev;
+              return Object.assign({}, prev, {
+                title: typeof entry.title === "string" ? entry.title : prev.title,
+                body: typeof entry.body === "string" ? entry.body : "",
+                tagsText: Array.isArray(entry.tags) ? entry.tags.join(", ") : prev.tagsText,
+                scope: typeof entry.scope === "string" && entry.scope !== "" ? entry.scope : prev.scope,
+                groupId: typeof entry.groupId === "string" ? entry.groupId : prev.groupId,
+                importance: importanceOf(entry.importance === undefined ? prev.importance : entry.importance),
+                ready: true,
+              });
+            });
+          } catch (error) {
+            setEditorError("读取条目失败：" + msgOf(error) + "（可点「重试读取」；正文未读到前不要保存）");
+          } finally {
+            setEditorLoading(false);
+          }
+        })();
+      }
+
+      function openEntry(item) {
+        const summary = item && typeof item === "object" ? item : {};
+        const id = typeof summary.id === "string" ? summary.id : "";
+        if (id === "") return;
+        setEditor({
+          id: id,
+          title: typeof summary.title === "string" ? summary.title : "",
+          body: "",
+          tagsText: Array.isArray(summary.tags) ? summary.tags.join(", ") : "",
+          scope: typeof summary.scope === "string" && summary.scope !== "" ? summary.scope : "global",
+          groupId: typeof summary.groupId === "string" ? summary.groupId : "",
+          importance: importanceOf(summary.importance),
+          ready: false,
+        });
+        setEditorError("");
+        loadEntryBody(id);
+      }
+
+      function newEntry() {
+        setEditor({ id: "", title: "", body: "", tagsText: "", scope: "global", groupId: "", importance: 0, ready: true });
+        setEditorError("");
+        setEditorLoading(false);
+      }
+
+      function closeEditor() {
+        setEditor(null);
+        setEditorError("");
+        setEditorLoading(false);
+      }
+
+      function saveEntry() {
+        if (!editor) return;
+        if (editor.id !== "" && editor.ready !== true) {
+          setEditorError("正文还没读取成功，先点「重试读取」；现在保存会把正文覆盖成空");
+          return;
+        }
+        const title = String(editor.title || "").trim();
+        if (title === "") {
+          setEditorError("标题不能为空");
+          return;
+        }
+        setEditorError("");
+        const payload = {
+          title: title,
+          body: String(editor.body || ""),
+          tags: parseTags(editor.tagsText),
+          scope: editor.scope,
+          groupId: editor.scope === "global" ? "" : String(editor.groupId || "").trim(),
+          importance: importanceOf(editor.importance),
+        };
+        if (editor.id !== "") payload.id = editor.id;
+        void run(async function () {
+          await apiPost(API + "/knowledge/save", payload);
+          setEditor(null);
+        }, editor.id === "" ? "条目已创建" : "条目已保存");
+      }
+
+      // ── 自动提炼 ──────────────────────────────────────────
+      const autoExtractCfg = (function () {
+        const snapshot = props && props.snapshot ? props.snapshot : null;
+        const settings = snapshot && snapshot.settings ? snapshot.settings : null;
+        const knowledge = settings && settings.knowledge ? settings.knowledge : null;
+        const value = knowledge && knowledge.autoExtract ? knowledge.autoExtract : null;
+        return value && typeof value === "object" ? value : {};
+      })();
+      const [autoSaveStatus, runAutoSave] = useSaver(props.reload);
+
+      function patchAutoExtract(partial) {
+        const next = Object.assign({}, autoExtractCfg, partial || {});
+        void runAutoSave(async function () {
+          await apiPost(API + "/settings", { patch: { knowledge: { autoExtract: next } } });
+        }, "自动提炼设置已保存");
+      }
+
+      const loadExtractStats = react.useCallback(async function () {
+        try {
+          const data = await apiGet(API + "/knowledge/extract/stats");
+          setExtractStats(data && data.stats ? data.stats : null);
+        } catch (error) {
+          setExtractStats(null);
+        }
+      }, []);
+      react.useEffect(function () { void loadExtractStats(); }, [loadExtractStats]);
+
+      async function triggerExtract() {
+        if (extracting) return;
+        setExtracting(true);
+        setExtractError("");
+        setExtractNote("");
+        try {
+          const result = await apiPost(API + "/knowledge/extract", {
+            transcript: extractTranscript.trim(),
+            scope: extractScope,
+            groupId: extractScope === "global" ? "" : extractGroupId.trim(),
+          });
+          const added = Array.isArray(result.added) ? result.added.length : 0;
+          const pendingCount = Array.isArray(result.pending) ? result.pending.length : 0;
+          const merged = Array.isArray(result.merged) ? result.merged.length : 0;
+          const scanned = typeof result.scannedMessages === "number" ? result.scannedMessages : 0;
+          setExtractNote(
+            "提炼完成：新增 " + added + " 条、待确认 " + pendingCount + " 条、合并 " + merged + " 条"
+            + (scanned > 0 ? "（扫描 " + scanned + " 条消息）" : ""),
+          );
+          setExtractTranscript("");
+          await loadList();
+          await loadExtractStats();
+        } catch (error) {
+          setExtractError("提炼失败：" + msgOf(error));
+        } finally {
+          setExtracting(false);
+        }
+      }
+
+      async function reviewEntry(entry, approve) {
+        if (!entry || typeof entry.id !== "string" || entry.id === "") return;
+        try {
+          await apiPost(API + "/knowledge/approve", { id: entry.id, approve: approve === true });
+          await loadList();
+          await loadExtractStats();
+        } catch (error) {
+          setListError(msgOf(error));
+        }
+      }
+
+      function removeEntry(entry) {
+        if (!entry || typeof entry.id !== "string" || entry.id === "") return;
+        if (
+          typeof window !== "undefined" &&
+          !window.confirm("确定删除条目「" + (entry.title || "未命名") + "」吗？此操作不可撤销。")
+        ) {
+          return;
+        }
+        const id = entry.id;
+        void run(async function () {
+          await apiPost(API + "/knowledge/delete", { id: id });
+          setEditor(function (prev) {
+            return prev && prev.id === id ? null : prev;
+          });
+        }, "条目已删除");
+      }
+
+      const tagList = tagRowsOf(tagSource);
+      const editorCard = editor
+        ? h(
+            Card,
+            {
+              title: editor.id === "" ? "新建知识条目" : "编辑知识条目",
+              hint: editorLoading ? "正在读取正文…" : "标题 + 正文 + 标签；作用域决定哪些会话能检索到它",
+            },
+            h(
+              "div",
+              { className: "qqb-grid-2" },
+              h(TextField, {
+                label: "标题",
+                value: editor.title,
+                placeholder: "一句话能看出这是什么知识",
+                onChange: function (value) {
+                  patchEditor({ title: value });
+                },
+              }),
+              h(ChoiceGroup, {
+                label: "作用域",
+                value: editor.scope,
+                options: [
+                  { value: "global", label: "全局" },
+                  { value: "group", label: "指定群" },
+                  { value: "c2c", label: "私聊" },
+                ],
+                onChange: function (value) {
+                  patchEditor({ scope: value });
+                },
+              }),
+            ),
+            editor.scope === "global"
+              ? null
+              : h(TextField, {
+                  label: "群号 / 会话 id",
+                  help: "作用域为指定群或私聊时填写；留空 = 暂不绑定具体会话",
+                  value: editor.groupId,
+                  mono: true,
+                  onChange: function (value) {
+                    patchEditor({ groupId: value });
+                  },
+                }),
+            h(AreaField, {
+              label: "正文",
+              rows: 8,
+              value: editor.body,
+              placeholder: "写清楚背景、结论与适用场景；检索会匹配标题与正文",
+              onChange: function (value) {
+                patchEditor({ body: value });
+              },
+            }),
+            h(
+              "div",
+              { className: "qqb-grid-2" },
+              h(TextField, {
+                label: "标签",
+                help: "逗号分隔，例如：部署,踩坑",
+                value: editor.tagsText,
+                onChange: function (value) {
+                  patchEditor({ tagsText: value });
+                },
+              }),
+              h(ChoiceGroup, {
+                label: "重要度",
+                value: importanceOf(editor.importance),
+                options: [
+                  { value: 0, label: "普通" },
+                  { value: 1, label: "留意" },
+                  { value: 2, label: "重要" },
+                  { value: 3, label: "关键" },
+                ],
+                onChange: function (value) {
+                  patchEditor({ importance: value });
+                },
+              }),
+            ),
+            editorError ? h("p", { className: "qqb-note qqb-note--err" }, editorError) : null,
+            h(StatusLine, { status: status, dirty: false }),
+            h(
+              "div",
+              { className: "qqb-toolbar" },
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "qqb-btn qqb-btn--primary",
+                  disabled: (status && status.state === "saving") || (editor.id !== "" && editor.ready !== true),
+                  onClick: function () {
+                    saveEntry();
+                  },
+                },
+                "保存",
+              ),
+              editor.id !== "" && editor.ready !== true && !editorLoading
+                ? h(
+                    "button",
+                    {
+                      type: "button",
+                      className: "qqb-btn",
+                      onClick: function () {
+                        loadEntryBody(editor.id);
+                      },
+                    },
+                    "重试读取",
+                  )
+                : null,
+              h("button", { type: "button", className: "qqb-btn", onClick: closeEditor }, "关闭"),
+              editor.id === ""
+                ? null
+                : h(
+                    "button",
+                    {
+                      type: "button",
+                      className: "qqb-btn qqb-btn--danger",
+                      onClick: function () {
+                        removeEntry(editor);
+                      },
+                    },
+                    "删除",
+                  ),
+            ),
+          )
+        : null;
+
+      const extractCard = h(
+        Card,
+        { title: "自动提炼（知识库）", hint: "每 N 轮从群聊提炼长期知识；低置信先进入「待确认」" },
+        h(Switch, {
+          label: "启用自动提炼",
+          help: "默认关闭；开启后每 N 轮后台调用一次模型，只提炼知识，不改人设/记忆",
+          checked: autoExtractCfg.enabled === true,
+          onChange: function (value) { patchAutoExtract({ enabled: value }); },
+        }),
+        h(
+          "div",
+          { className: "qqb-grid-2" },
+          h(NumberField, { label: "每 N 轮提炼一次", help: "1-100，默认 6", value: autoExtractCfg.everyRounds === undefined ? 6 : autoExtractCfg.everyRounds, min: 1, max: 100, step: 1, onChange: function (value) { patchAutoExtract({ everyRounds: value }); } }),
+          h(NumberField, { label: "单次最多条数", help: "1-10，默认 3", value: autoExtractCfg.maxEntries === undefined ? 3 : autoExtractCfg.maxEntries, min: 1, max: 10, step: 1, onChange: function (value) { patchAutoExtract({ maxEntries: value }); } }),
+          h(NumberField, { label: "置信度阈值", help: "0-1，默认 0.8；低于阈值进「待确认」", value: autoExtractCfg.minConfidence === undefined ? 0.8 : autoExtractCfg.minConfidence, min: 0, max: 1, step: 0.05, onChange: function (value) { patchAutoExtract({ minConfidence: value }); } }),
+        ),
+        h(
+          "div",
+          { className: "qqb-grid-2" },
+          h(TextField, { label: "提炼 Provider", help: "留空 = 当前机器人模型", value: autoExtractCfg.provider || "", onChange: function (value) { patchAutoExtract({ provider: value }); } }),
+          h(TextField, { label: "提炼 Model", help: "留空 = 当前机器人模型", value: autoExtractCfg.model || "", onChange: function (value) { patchAutoExtract({ model: value }); } }),
+        ),
+        h(StatusLine, { status: autoSaveStatus, dirty: false }),
+        h(
+          "p",
+          { className: "qqb-help" },
+          extractStats
+            ? ("上次提炼：" + (extractStats.lastResult ? (extractStats.lastResult.ok ? "成功，新增 " + (extractStats.lastResult.added || 0) + " 条 / 待确认 " + (extractStats.lastResult.pending || 0) + " 条" : "失败：" + (extractStats.lastResult.error || "未知错误")) : "尚未提炼") + "（距下次自动触发还差 " + (extractStats.roundsSinceExtract || 0) + " 轮）")
+            : "尚未提炼",
+        ),
+        h(
+          "div",
+          { className: "qqb-prompt-note" },
+          h("p", { className: "qqb-help" }, "立即提炼一次：可粘贴一段群聊文本试跑；留空则用当前会话最近消息（需要已开启自动提炼或手动触发）。低置信条目会进入「待确认」，不会参与回答。"),
+          h(AreaField, { label: "群聊文本（可选）", rows: 5, value: extractTranscript, placeholder: "用户: 周六开黑吗\n助手: 每周六晚八点开黑", onChange: setExtractTranscript }),
+          h(
+            "div",
+            { className: "qqb-grid-2" },
+            h(ChoiceGroup, { label: "落库作用域", value: extractScope, options: [{ value: "global", label: "全局" }, { value: "group", label: "指定群" }], onChange: setExtractScope }),
+            extractScope === "group" ? h(TextField, { label: "群号 / 会话 id", value: extractGroupId, mono: true, onChange: setExtractGroupId }) : null,
+          ),
+          extractError ? h("p", { className: "qqb-note qqb-note--err" }, extractError) : null,
+          extractNote ? h("p", { className: "qqb-note" }, extractNote) : null,
+          h(
+            "div",
+            { className: "qqb-toolbar" },
+            h("button", { type: "button", className: "qqb-btn qqb-btn--primary", disabled: extracting, onClick: function () { void triggerExtract(); } }, extracting ? "正在提炼…" : "立即提炼"),
+          ),
+        ),
+      );
+
+      const listCard = h(
+        Card,
+        { title: "知识条目", hint: "共 " + total + " 条" + (loading ? " · 正在加载…" : "") },
+        h(
+          "div",
+          { className: "qqb-toolbar" },
+          h("input", {
+            className: "qqb-input",
+            style: { maxWidth: 240 },
+            type: "search",
+            placeholder: "搜索标题或正文（回车）",
+            value: q,
+            spellCheck: false,
+            onChange: function (event) {
+              setQ(event.currentTarget.value);
+            },
+            onKeyDown: function (event) {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                setQuery(q.trim());
+              }
+            },
+          }),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "qqb-btn qqb-btn--sm",
+              onClick: function () {
+                setQuery(q.trim());
+              },
+            },
+            "搜索",
+          ),
+          h(
+            "select",
+            {
+              className: "qqb-select",
+              style: { width: "auto", maxWidth: 150 },
+              value: scope,
+              "aria-label": "按作用域筛选",
+              onChange: function (event) {
+                setScope(event.currentTarget.value);
+              },
+            },
+            h("option", { value: "" }, "全部作用域"),
+            h("option", { value: "global" }, "全局"),
+            h("option", { value: "group" }, "指定群"),
+            h("option", { value: "c2c" }, "私聊"),
+          ),
+          h(
+            "select",
+            {
+              className: "qqb-select",
+              style: { width: "auto", maxWidth: 130 },
+              value: reviewStatus,
+              "aria-label": "按审核状态筛选",
+              onChange: function (event) { setReviewStatus(event.currentTarget.value); },
+            },
+            h("option", { value: "" }, "全部状态"),
+            h("option", { value: "approved" }, "已采纳"),
+            h("option", { value: "pending" }, "待确认"),
+          ),
+          h(
+            "select",
+            {
+              className: "qqb-select",
+              style: { width: "auto", maxWidth: 150 },
+              value: tag,
+              "aria-label": "按标签筛选",
+              onChange: function (event) {
+                setTag(event.currentTarget.value);
+              },
+            },
+            h("option", { value: "" }, "全部标签"),
+            tagList.map(function (row) {
+              return h(
+                "option",
+                { key: row.tag, value: row.tag },
+                row.tag + (row.count > 0 ? "（" + row.count + "）" : ""),
+              );
+            }),
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "qqb-btn qqb-btn--sm",
+              onClick: function () {
+                setQ("");
+                setQuery("");
+                setScope("");
+                setTag("");
+                setReviewStatus("");
+              },
+            },
+            "重置",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "qqb-btn qqb-btn--sm qqb-btn--primary",
+              onClick: newEntry,
+            },
+            "新建条目",
+          ),
+        ),
+        listError ? h(ErrorBlock, { text: "读取失败：" + listError, onRetry: loadList }) : null,
+        listError
+          ? h(
+              "p",
+              { className: "qqb-help" },
+              "知识库接口由插件服务端提供（GET /qqbot-buddy/api/knowledge）。旧版服务端没有这个接口，重启 dsh 加载新版插件后可用。",
+            )
+          : null,
+        !listError && !loading && items.length === 0
+          ? h(
+              "p",
+              { className: "qqb-empty" },
+              query !== "" || scope !== "" || tag !== ""
+                ? "没有匹配的知识条目"
+                : "还没有知识条目（可以手动新建，或让 bot 在对话里保存）",
+            )
+          : null,
+        items.length > 0
+          ? h(
+              "div",
+              { className: "qqb-list" },
+              items.map(function (item, index) {
+                const entry = item && typeof item === "object" ? item : {};
+                const id = typeof entry.id === "string" ? entry.id : "row-" + index;
+                const title = typeof entry.title === "string" && entry.title !== "" ? entry.title : "（未命名条目）";
+                const tags = Array.isArray(entry.tags)
+                  ? entry.tags.filter(function (value) {
+                      return typeof value === "string" && value !== "";
+                    })
+                  : [];
+                const meta = [
+                  scopeLabel(entry.scope),
+                  typeof entry.groupId === "string" && entry.groupId !== "" ? "群 " + shortCode(entry.groupId, 6) : "",
+                  importanceLabel(entry.importance),
+                  formatTimestamp(entry.updatedAt || entry.createdAt),
+                ]
+                  .filter(function (part) {
+                    return part !== "" && part !== "—";
+                  })
+                  .join(" · ");
+                const active = editor !== null && editor.id === id;
+                return h(
+                  "div",
+                  { className: "qqb-list-item qqb-list-item--stack", key: id },
+                  h(
+                    "div",
+                    { className: "qqb-list-main" },
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        className: "qqb-file" + (active ? " qqb-file--active" : ""),
+                        onClick: function () {
+                          openEntry(item);
+                        },
+                      },
+                      title,
+                    ),
+                    h("span", { className: "qqb-list-meta" }, meta || "—"),
+                    tags.length > 0
+                      ? h(
+                          "div",
+                          { className: "qqb-chip-row" },
+                          tags.map(function (value) {
+                            return h("span", { className: "qqb-tag", key: value }, "#" + value);
+                          }),
+                        )
+                      : null,
+                  ),
+                  entry.status === "pending"
+                    ? h("span", { className: "qqb-badge qqb-badge--warn" }, "待确认")
+                    : null,
+                  entry.status === "pending"
+                    ? h("button", { type: "button", className: "qqb-btn qqb-btn--sm qqb-btn--primary", onClick: function () { void reviewEntry(item, true); } }, "采纳")
+                    : null,
+                  entry.status === "pending"
+                    ? h("button", { type: "button", className: "qqb-btn qqb-btn--sm", onClick: function () { void reviewEntry(item, false); } }, "丢弃")
+                    : null,
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      className: "qqb-btn qqb-btn--sm",
+                      onClick: function () {
+                        openEntry(item);
+                      },
+                    },
+                    "编辑",
+                  ),
+                );
+              }),
+            )
+          : null,
+        items.length > 0 && items.length < total
+          ? h(
+              "div",
+              { className: "qqb-toolbar" },
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "qqb-btn qqb-btn--sm",
+                  onClick: function () {
+                    setLimit(limit + 50);
+                  },
+                },
+                "加载更多（已显示 " + items.length + " / " + total + "）",
+              ),
+            )
+          : null,
+      );
+
+      return h("div", { className: "qqb-page" }, editorCard, extractCard, listCard);
+    }
+
+    // ── 群友库页（widget: members） ───────────────────────────
+    function MembersPage(props) {
+      const [items, setItems] = react.useState([]);
+      const [total, setTotal] = react.useState(0);
+      const [groupSource, setGroupSource] = react.useState([]);
+      const [loading, setLoading] = react.useState(true);
+      const [listError, setListError] = react.useState("");
+      const [q, setQ] = react.useState("");
+      const [query, setQuery] = react.useState("");
+      const [groupId, setGroupId] = react.useState("");
+      const [editor, setEditor] = react.useState(null);
+      const [editorError, setEditorError] = react.useState("");
+
+      const loadList = react.useCallback(async function () {
+        setLoading(true);
+        const params = [];
+        if (query !== "") params.push("q=" + encodeURIComponent(query));
+        if (groupId !== "") params.push("groupId=" + encodeURIComponent(groupId));
+        try {
+          const data = await apiGet(API + "/members" + (params.length > 0 ? "?" + params.join("&") : ""));
+          const nextItems = Array.isArray(data.items) ? data.items : [];
+          setItems(nextItems);
+          setTotal(typeof data.total === "number" ? data.total : nextItems.length);
+          setGroupSource(Array.isArray(data.groups) ? data.groups : []);
+          setListError("");
+        } catch (error) {
+          setItems([]);
+          setTotal(0);
+          setListError(msgOf(error));
+        } finally {
+          setLoading(false);
+        }
+      }, [query, groupId]);
+
+      const [status, run] = useSaver(loadList);
+      react.useEffect(
+        function () {
+          void loadList();
+        },
+        [loadList],
+      );
+
+      function openMember(item) {
+        const view = memberViewOf(item);
+        if (view.id === "") return;
+        setEditor({
+          view: view,
+          name: view.name,
+          notes: view.notes,
+          tagsText: view.tags.join(", "),
+          importance: view.importance,
+        });
+        setEditorError("");
+      }
+
+      function closeEditor() {
+        setEditor(null);
+        setEditorError("");
+      }
+
+      function patchEditor(partial) {
+        setEditor(function (prev) {
+          return prev ? Object.assign({}, prev, partial) : prev;
+        });
+      }
+
+      function saveMember() {
+        if (!editor) return;
+        const name = String(editor.name || "").trim();
+        if (name === "") {
+          setEditorError("昵称不能为空");
+          return;
+        }
+        setEditorError("");
+        void run(async function () {
+          await apiPost(API + "/members/save", {
+            id: editor.view.id,
+            name: name,
+            tags: parseTags(editor.tagsText),
+            notes: String(editor.notes || ""),
+            importance: importanceOf(editor.importance),
+          });
+          setEditor(null);
+        }, "群友资料已保存");
+      }
+
+      function removeMember() {
+        if (!editor || editor.view.id === "") return;
+        if (typeof window !== "undefined" && !window.confirm("确定删除该群友条目吗？此操作不可撤销。")) return;
+        const id = editor.view.id;
+        void run(async function () {
+          await apiPost(API + "/members/delete", { id: id });
+          setEditor(null);
+        }, "群友条目已删除");
+      }
+
+      const groupList = groupRowsOf(groupSource);
+
+      const editorCard = editor
+        ? h(
+            Card,
+            {
+              title: "群友详情",
+              hint: editor.view.openid !== "" ? "openid " + editor.view.openid : shortCode(editor.view.id, 12),
+            },
+            h(
+              "div",
+              { className: "qqb-grid-2" },
+              h(TextField, {
+                label: "昵称",
+                value: editor.name,
+                placeholder: "群里显示的名字（可自定义备注名）",
+                onChange: function (value) {
+                  patchEditor({ name: value });
+                },
+              }),
+              h(TextField, {
+                label: "标签",
+                help: "逗号分隔，例如：老群友,技术",
+                value: editor.tagsText,
+                onChange: function (value) {
+                  patchEditor({ tagsText: value });
+                },
+              }),
+            ),
+            h(AreaField, {
+              label: "备注",
+              rows: 5,
+              value: editor.notes,
+              placeholder: "性格、偏好、约定、不要提的话题…",
+              onChange: function (value) {
+                patchEditor({ notes: value });
+              },
+            }),
+            h(ChoiceGroup, {
+              label: "重要度",
+              value: importanceOf(editor.importance),
+              options: [
+                { value: 0, label: "普通" },
+                { value: 1, label: "留意" },
+                { value: 2, label: "重要" },
+                { value: 3, label: "关键" },
+              ],
+              onChange: function (value) {
+                patchEditor({ importance: value });
+              },
+            }),
+            h(
+              "div",
+              { className: "qqb-kv" },
+              kvRow("openid", editor.view.openid || "—"),
+              kvRow("发言数", editor.view.messageCount),
+              kvRow("最近活跃", editor.view.lastSeenAt > 0 ? formatTime(editor.view.lastSeenAt) : "—"),
+              kvRow("所在群", editor.view.groupRows.length === 0 ? "—" : editor.view.groupRows.length + " 个"),
+              editor.view.aliases.length > 0 ? kvRow("别名", editor.view.aliases.join(" / ")) : null,
+            ),
+            editor.view.groupRows.length > 0
+              ? h(
+                  "div",
+                  { className: "qqb-chip-row" },
+                  editor.view.groupRows.map(function (row) {
+                    return h(
+                      "span",
+                      { className: "qqb-chip", key: row.id },
+                      h("span", { className: "qqb-chip-label" }, row.name || shortCode(row.id, 8)),
+                      row.count > 0 ? h("span", { className: "qqb-chip-meta" }, row.count + " 条") : null,
+                    );
+                  }),
+                )
+              : null,
+            editorError ? h("p", { className: "qqb-note qqb-note--err" }, editorError) : null,
+            h(StatusLine, { status: status, dirty: false }),
+            h(
+              "div",
+              { className: "qqb-toolbar" },
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "qqb-btn qqb-btn--primary",
+                  disabled: status && status.state === "saving",
+                  onClick: function () {
+                    saveMember();
+                  },
+                },
+                "保存",
+              ),
+              h("button", { type: "button", className: "qqb-btn", onClick: closeEditor }, "关闭"),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "qqb-btn qqb-btn--danger",
+                  onClick: function () {
+                    removeMember();
+                  },
+                },
+                "删除",
+              ),
+            ),
+          )
+        : null;
+
+      const listCard = h(
+        Card,
+        { title: "群友", hint: "共 " + total + " 位" + (loading ? " · 正在加载…" : "") },
+        h(
+          "div",
+          { className: "qqb-toolbar" },
+          h("input", {
+            className: "qqb-input",
+            style: { maxWidth: 240 },
+            type: "search",
+            placeholder: "搜索昵称 / 备注 / openid（回车）",
+            value: q,
+            spellCheck: false,
+            onChange: function (event) {
+              setQ(event.currentTarget.value);
+            },
+            onKeyDown: function (event) {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                setQuery(q.trim());
+              }
+            },
+          }),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "qqb-btn qqb-btn--sm",
+              onClick: function () {
+                setQuery(q.trim());
+              },
+            },
+            "搜索",
+          ),
+          h(
+            "select",
+            {
+              className: "qqb-select",
+              style: { width: "auto", maxWidth: 200 },
+              value: groupId,
+              "aria-label": "按群筛选",
+              onChange: function (event) {
+                setGroupId(event.currentTarget.value);
+              },
+            },
+            h("option", { value: "" }, "全部群"),
+            groupList.map(function (row) {
+              return h(
+                "option",
+                { key: row.id, value: row.id },
+                (row.name || shortCode(row.id, 8)) + (row.count > 0 ? "（" + row.count + "）" : ""),
+              );
+            }),
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "qqb-btn qqb-btn--sm",
+              onClick: function () {
+                setQ("");
+                setQuery("");
+                setGroupId("");
+              },
+            },
+            "重置",
+          ),
+        ),
+        listError ? h(ErrorBlock, { text: "读取失败：" + listError, onRetry: loadList }) : null,
+        listError
+          ? h(
+              "p",
+              { className: "qqb-help" },
+              "群友库接口由插件服务端提供（GET /qqbot-buddy/api/members）。旧版服务端没有这个接口，重启 dsh 加载新版插件后可用。",
+            )
+          : null,
+        !listError && !loading && items.length === 0
+          ? h(
+              "p",
+              { className: "qqb-empty" },
+              query !== "" || groupId !== ""
+                ? "没有匹配的群友"
+                : "还没有群友记录（开启后会在群消息里自动记录，不需要手动添加）",
+            )
+          : null,
+        items.length > 0
+          ? h(
+              "div",
+              { className: "qqb-list" },
+              items.map(function (item, index) {
+                const view = memberViewOf(item);
+                const id = view.id !== "" ? view.id : "member-" + index;
+                const label = view.name !== "" ? view.name : "openid " + shortCode(view.openid, 6);
+                const meta = [
+                  view.openid !== "" ? "openid " + shortCode(view.openid, 6) : "",
+                  view.groupRows.length > 0 ? view.groupRows.length + " 个群" : "",
+                  view.messageCount > 0 ? "发言 " + view.messageCount : "",
+                  view.lastSeenAt > 0 ? "最近 " + formatTime(view.lastSeenAt) : "",
+                ]
+                  .filter(function (part) {
+                    return part !== "";
+                  })
+                  .join(" · ");
+                const active = editor !== null && editor.view.id === id;
+                return h(
+                  "div",
+                  { className: "qqb-list-item qqb-list-item--stack", key: id },
+                  h(
+                    "div",
+                    { className: "qqb-list-main" },
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        className: "qqb-file" + (active ? " qqb-file--active" : ""),
+                        onClick: function () {
+                          openMember(item);
+                        },
+                      },
+                      label,
+                    ),
+                    h("span", { className: "qqb-list-meta" }, meta || "—"),
+                    view.tags.length > 0
+                      ? h(
+                          "div",
+                          { className: "qqb-chip-row" },
+                          view.tags.map(function (value) {
+                            return h("span", { className: "qqb-tag", key: value }, "#" + value);
+                          }),
+                        )
+                      : null,
+                  ),
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      className: "qqb-btn qqb-btn--sm",
+                      onClick: function () {
+                        openMember(item);
+                      },
+                    },
+                    "详情",
+                  ),
+                );
+              }),
+            )
+          : null,
+      );
+
+      return h("div", { className: "qqb-page" }, editorCard, listCard);
+    }
+
     // ── 设置页 Section 主体（工作区导航） ──────────────────────
 
     /**
@@ -4948,6 +6969,11 @@ window.__ModuleLoader__.load({
       content: ["content", "stickers"],
       stickers: ["content", "stickers"],
       memory: ["content", "memory"],
+      knowledge: ["content", "knowledge"],
+      members: ["content", "members"],
+      bots: ["overview", "bots"],
+      botWorkspace: ["overview", "botWorkspace"],
+      workspace: ["overview", "botWorkspace"],
       commands: ["security", "commands"],
       security: ["security", "commands"],
     };
@@ -4963,6 +6989,13 @@ window.__ModuleLoader__.load({
       const [refreshing, setRefreshing] = react.useState(false);
       const [toast, setToast] = react.useState("");
       const toastTimer = react.useRef(null);
+      // 多机器人：bots=null 表示服务端没有 /bots 接口（降级单机器人）
+      // botsDone 用来区分「加载中」和「接口不存在」；botEpoch 用于切换机器人时重挂当前页
+      const [bots, setBots] = react.useState(null);
+      const [botsDone, setBotsDone] = react.useState(false);
+      const [botId, setBotId] = react.useState(currentBotId);
+      const [activeBotId, setActiveBotId] = react.useState("");
+      const [botEpoch, setBotEpoch] = react.useState(0);
 
       const reload = react.useCallback(async function () {
         setRefreshing(true);
@@ -4986,17 +7019,73 @@ window.__ModuleLoader__.load({
         [reload],
       );
 
-      // 结构声明由服务端下发（lib/settings-schema.js）：加设置页无需改前端
-      react.useEffect(function () {
-        void (async function () {
-          try {
-            const data = await apiGet(API + "/schema");
-            setSchema(data);
-          } catch (error) {
-            setSchema(null);
-          }
-        })();
+      /** 结构声明由服务端下发（lib/settings-schema.js）：加设置页无需改前端。 */
+      const loadSchema = react.useCallback(async function () {
+        try {
+          const data = await apiGet(API + "/schema");
+          setSchema(data);
+        } catch (error) {
+          setSchema(null);
+        }
       }, []);
+      react.useEffect(
+        function () {
+          void loadSchema();
+        },
+        [loadSchema],
+      );
+
+      /**
+       * 读取机器人列表（GET /bots）。
+       * 旧服务端没有这个接口时静默降级为单机器人：不报错、不阻塞页面渲染。
+       */
+      const loadBots = react.useCallback(async function () {
+        try {
+          const data = await apiGet(BOTS_API.list, null);
+          const list = Array.isArray(data.bots) ? data.bots : [];
+          setBots(list);
+          const active = typeof data.activeBotId === "string" ? data.activeBotId : "";
+          setActiveBotId(active);
+          setBotId(function (prev) {
+            // 首次加载跟随服务端 activeBotId；用户已手动切换过则保持用户选择
+            if (prev !== "") return prev;
+            if (active !== "") currentBotId = active;
+            return active;
+          });
+        } catch (error) {
+          // 老服务端（无 /bots）：保持已经拿到的列表，没有就降级单机器人
+          setBots(function (prev) {
+            return Array.isArray(prev) ? prev : null;
+          });
+        } finally {
+          setBotsDone(true);
+        }
+      }, []);
+      react.useEffect(
+        function () {
+          void loadBots();
+        },
+        [loadBots],
+      );
+
+      /** 切换当前查看的机器人：重挂当前页（让页面按新 botId 重新取数）并重载快照与结构。 */
+      const switchBot = react.useCallback(
+        function (id) {
+          const next = typeof id === "string" ? id : "";
+          if (next === currentBotId) return;
+          currentBotId = next;
+          setBotId(next);
+          // 先清空快照：避免切换瞬间还显示上一个机器人的数据（各页随后自己按新 botId 取数）
+          setSnapshot(null);
+          setBotEpoch(function (prev) {
+            return prev + 1;
+          });
+          void reload();
+          void loadSchema();
+          void loadBots();
+        },
+        [reload, loadSchema, loadBots],
+      );
 
       /** 页头短暂提示（页面内小操作完成后回报，不打断当前页面）。 */
       const notify = react.useCallback(function (text) {
@@ -5025,6 +7114,9 @@ window.__ModuleLoader__.load({
       // widget id -> 组件（schema 里的 widget 字段指向这里）
       const widgets = {
         overview: OverviewPage,
+        // 机器人（多机器人）
+        bots: BotsPage,
+        botWorkspace: BotWorkspacePage,
         // 对话
         frequency: FrequencyTabPage,
         triggers: TriggersTabPage,
@@ -5042,6 +7134,8 @@ window.__ModuleLoader__.load({
         // 内容
         stickers: StickersTabPage,
         memory: MemoryPage,
+        knowledge: KnowledgePage,
+        members: MembersPage,
         // 权限
         commands: CommandsPage,
         safety: SafetyPage,
@@ -5070,6 +7164,63 @@ window.__ModuleLoader__.load({
       const currentItem = items.filter(function (item) { return item.id === page; })[0] || items[0] || null;
       const ActivePage = resolvePage(currentItem);
       const showSidebar = items.length > 1;
+
+      // 顶部机器人选择器：只占一个小块（窄屏自动换行，不挤压标题 / 徽标 / 刷新）
+      const hasBotsPage = sections.some(function (section) {
+        return itemsOf(section).some(function (item) {
+          return (item.widget || "") === "bots";
+        });
+      });
+      const pickBot = bots && bots.length > 0
+        ? (function () {
+            const shown =
+              bots.filter(function (item) { return item.id === botId; })[0] ||
+              bots.filter(function (item) { return item.id === activeBotId; })[0] ||
+              bots[0];
+            const dotClass = shown.ready === true
+              ? "qqb-bot-dot--ok"
+              : typeof shown.appId === "string" && shown.appId !== ""
+                ? "qqb-bot-dot--warn"
+                : "";
+            return h(
+              "div",
+              { className: "qqb-bot-pick" },
+              h("span", { className: "qqb-bot-dot " + dotClass, title: shown.ready === true ? "已连接" : "未连接" }),
+              h(
+                "select",
+                {
+                  className: "qqb-select",
+                  value: shown.id,
+                  title: "当前查看的机器人",
+                  "aria-label": "当前查看的机器人",
+                  onChange: function (event) {
+                    switchBot(event.currentTarget.value);
+                  },
+                },
+                bots.map(function (item) {
+                  return h(
+                    "option",
+                    { key: item.id, value: item.id },
+                    (item.name || item.id) + (item.legacy === true ? "（旧）" : ""),
+                  );
+                }),
+              ),
+              hasBotsPage
+                ? h(
+                    "button",
+                    {
+                      type: "button",
+                      className: "qqb-btn qqb-btn--sm",
+                      onClick: function () {
+                        navigate("bots");
+                      },
+                    },
+                    "管理机器人",
+                  )
+                : null,
+            );
+          })()
+        : null;
 
       /** 切工作区：落到它的落地页。 */
       function openSection(sectionId) {
@@ -5116,11 +7267,18 @@ window.__ModuleLoader__.load({
       }
 
       const pageProps = {
-        key: view + "/" + page,
+        // 切换机器人时 botEpoch 变化 → 页面重挂、按新 botId 重新取数
+        key: botEpoch + "|" + view + "/" + page,
         snapshot: snapshot,
         reload: reload,
         onNavigate: navigate,
         onNotify: notify,
+        botId: botId,
+        activeBotId: activeBotId,
+        bots: bots,
+        botsDone: botsDone,
+        onSelectBot: switchBot,
+        onBotsChanged: loadBots,
       };
 
       return h(
@@ -5138,13 +7296,14 @@ window.__ModuleLoader__.load({
               h("h2", { className: "qqb-title" }, "QQ 机器人"),
               h("span", { className: "qqb-version" }, "dsh-qqbot-buddy v" + ((snapshot && snapshot.version) || "—")),
             ),
-            h("p", { className: "qqb-sub" }, "连接状态、对话节奏、能力与模型、人设提示词、表情与记忆、命令与权限"),
+            h("p", { className: "qqb-sub" }, "多机器人、连接状态、对话节奏、能力与模型、人设提示词、表情/记忆/知识/群友、命令与权限"),
           ),
           h(
             "div",
             { className: "qqb-head-status" },
             toast ? h("span", { className: "qqb-toast", role: "status" }, toast) : null,
             h("span", { className: "qqb-badge " + badgeClass }, badgeText),
+            pickBot,
             h(
               "button",
               {

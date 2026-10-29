@@ -29,9 +29,10 @@ const BASE = {
   tools: { capabilities: { skills: false, imagegen: false }, extraAllowed: [], skills: { mode: 'allow', allowed: [] } },
 };
 
-test('默认：内置 5 能力开启，imagegen/skills 关闭，工具集不含它们', () => {
+test('默认：内置 7 能力开启，imagegen/skills 关闭，工具集不含它们', () => {
   const plan = catalog(BASE).resolve();
-  assert.deepEqual(plan.enabled, ['workspace', 'web', 'memory', 'stickers', 'vision']);
+  // v0.16 起 knowledge / members 与记忆同级，默认开启
+  assert.deepEqual(plan.enabled, ['workspace', 'web', 'memory', 'knowledge', 'members', 'stickers', 'vision']);
   assert.ok(plan.tools.includes('read'));
   assert.ok(plan.tools.includes('web_search'));
   assert.ok(plan.tools.includes('qqbot_describe_image'));
@@ -146,7 +147,7 @@ test('capabilities 全关时放行为空（合法状态，不报错）', () => {
   const plan = catalog({
     ...BASE,
     features: { workspace: false, web: false, stickers: false, vision: false, memory: false },
-    tools: { ...BASE.tools, capabilities: { skills: false, imagegen: false } },
+    tools: { ...BASE.tools, capabilities: { skills: false, imagegen: false, knowledge: false, members: false } },
   }).resolve();
   assert.deepEqual(plan.tools, []);
   assert.deepEqual(plan.mounts, []);

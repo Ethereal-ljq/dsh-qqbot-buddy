@@ -456,6 +456,24 @@ test('注册全部 API 路由，dispose 幂等', () => {
     '/stickers/upload',
     '/stickers/update',
     '/stickers/delete',
+    // v0.16 多机器人 / 知识库 / 群友库 / 涌现
+    '/bots',
+    '/bots/create',
+    '/bots/update',
+    '/bots/delete',
+    '/bots/activate',
+    '/knowledge',
+    '/knowledge/entry',
+    '/knowledge/save',
+    '/knowledge/delete',
+    '/members',
+    '/members/save',
+    '/members/delete',
+    '/recall/preview',
+    // v0.16.1 知识库自动提炼
+    '/knowledge/extract',
+    '/knowledge/extract/stats',
+    '/knowledge/approve',
   ].map((suffix) => BASE + suffix);
   for (const fullPath of expected) assert.ok(server.routes.has(fullPath), '缺少路由 ' + fullPath);
   assert.equal(server.routes.size, expected.length);

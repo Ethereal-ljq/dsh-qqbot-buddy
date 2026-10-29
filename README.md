@@ -51,6 +51,81 @@ scripts/                install-local / test-profile / deploy-live / rollback
 test/                   node:test 单测与隔离验收
 ```
 
+## v0.16：多机器人 · 知识库 · 群友库 · 必要时涌现
+
+v0.16 把单机器人插件升级成**多机器人宿主**，并补齐长期记忆、知识库、群友库与按需注入：
+
+| 能力 | 说明 |
+|---|---|
+| 多机器人 | 同一插件实例可同时配置/连接多个 QQ 机器人；每个机器人有独立凭据、设置、会话、人设、记忆、知识、群友、表情包与工作区。设置页顶部有机器人选择器，概览 → 机器人列表/工作区与文件 可新建、启用、扫码绑定、删除与改路径。 |
+| 每个机器人独立配置 | 所有运行期设置按机器人落盘；切换机器人后对话/能力/提示词/内容/权限页都读写该机器人的配置。 |
+| 文件位置可指定 | 每个机器人有工作区根（默认 `<workspaceRoot>/bots/<id>`，legacy 机器人沿用旧 `cwd`），人设/memory/knowledge/members/stickers 五个资源路径可在「工作区与文件」里覆盖，并提示“不在工作区内”。 |
+| 长期记忆 v2 | `index.json` v2（重要度、命中次数），新增按消息相关性召回 `memory.recall`；旧 v1 索引自动迁移，旧 workspace 无需搬文件。 |
+| 知识库 | 条目 = 标题 + 正文 + 标签 + 作用域（全局/群/私聊）+ 重要度；markdown 落盘 + 索引；工具 `knowledge_search/knowledge_read/knowledge_save`；设置页「内容 → 知识库」可增删改查。 |
+| 群友库 | 复用条目库，按 openid 稳定建档：昵称、别名、标签、备注、所在群、发言数、最近活跃；群消息自动收录活跃度；工具 `member_lookup/member_note`；设置页「内容 → 群友库」。 |
+| 必要时涌现 | 每轮按当前消息/群/发言人检索 记忆 + 知识 + 群友，只把相关内容拼成【本轮相关背景】注入 prompt 的 `recall` 段；无关则完全不注入。设置页记忆页可调参数并用「立即预览」验证。 |
+
+### v0.17：知识自动提炼 + 插件工具作用域收口
+
+**知识自动提炼（阶段一：只提炼知识，不改群友备注）**
+
+- 默认关闭，在「内容 → 知识库 → 自动提炼」里开启；每 N 轮（默认 6）从当前会话最近消息里提炼长期群知识
+  （群规/固定活动/FAQ/重要结论/群梗），单次最多 3 条，60s 超时、后台跑、失败静默只记日志。
+- 入库策略：**置信度 ≥ 阈值（默认 0.8）直接入库；低于阈值写「待确认」**。待确认条目**不参与检索/涌现注入**，
+  在知识库里可「采纳 / 丢弃」；同标题同作用域自动合并，不重复建条目。
+- 设置：`knowledge.autoExtract = { enabled, everyRounds, maxEntries, minConfidence, provider, model }`；
+  provider/model 留空用当前机器人模型。支持手动「立即提炼」（可粘贴一段群聊文本试跑）。
+- API：`POST /knowledge/extract`、`GET /knowledge/extract/stats`、`POST /knowledge/approve`；
+  `GET /knowledge?status=pending|approved` 过滤；列表项带 `status` 字段。
+
+**插件工具作用域收口（重要行为变化）**
+
+- `memory_* / knowledge_* / member_* / qqbot_send_file / qqbot_sticker_save / qqbot_describe_image`
+  不再注册到全局 tools 注册表，而是**只注册进 QQ 会话 agent 的 scope**：
+  只有走 qqbot-buddy 会话（qqbot preset / 你为机器人选的 preset）的 agent 能看到/调用这些工具；
+  宿主里的普通 Web agent、其它 preset 不会看到，也不会调用到。
+- 工具解析仍然经 `exec.agent → BotRuntime`，多机器人互不串；agent 释放时作用域工具随 scope 自动清理。
+- 兼容：单元测试与旧单机器人模式不变（旧的 `registerSendFileTool` 等签名保持可用，用于独立单测）。
+
+### 数据布局（每个机器人一个工作区）
+
+```
+<workspaceRoot>/                     # config.workspaceRoot，空 = cwd
+├── bots.json                        # 机器人注册表（不含 appSecret）
+├── <legacy 机器人的原有文件>          # 从 v0.15 升级时原地保留
+└── bots/<botId>/                    # 新建机器人的工作区
+    ├── persona.md
+    ├── memory/  knowledge/  members/  stickers/
+    └── .qqbot/{state,media}/settings.json、credentials.json（0600）、sessions.json
+```
+
+- 凭据从 v0.16 起写 `<bot.stateDir>/credentials.json`（0600），不再依赖 profile patch；
+  只有首次迁移且凭据文件不存在时，才用旧 `config.appId/appSecret` 播种 legacy 机器人。
+- 升级不会移动旧数据：首次启动自动迁移出 `id=default` 的 legacy 机器人，路径与 v0.15 一致。
+- 新增部署配置：`workspaceRoot`（工作区根，默认 cwd）、`maxBots`（默认 8）、`registerTools`
+  （默认 true；测试/多实例部署可关）。
+
+### 新增 HTTP API（均在 `/qqbot-buddy/api`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/bots` | 机器人列表 + activeBotId + maxBots + workspaceRoot |
+| POST | `/bots/create` | `/bots/update` | `/bots/delete` | `/bots/activate` | 新建 / 改名启用改路径改凭据 / 删除 / 设为默认 |
+| GET | `/knowledge` | `/knowledge/entry` | 条目列表（q/tag/scope/groupId/分页）与详情 |
+| POST | `/knowledge/save` | `/knowledge/delete` | 新建/更新（缺 id 即新建）、删除 |
+| GET | `/members` | 群友列表 + 群列表 + 标签 |
+| POST | `/members/save` | `/members/delete` | 备注/标签/重要度、删除 |
+| GET | `/recall/preview` | 用一段文本预览本轮会注入的【本轮相关背景】 |
+
+其余旧接口都接受 `?botId=<id>`（GET）或 body `botId`（POST），缺省 = 当前 active 机器人。
+
+### 迁移与兼容
+
+- 旧 `settings.json`/`persona.md`/`memory`/`stickers` 路径原样可读；
+- 旧 `index.json`（记忆 v1）自动迁移到 v2；旧部署没有 `bots.json` 时自动生成；
+- 旧配置项（appId/appSecret/cwd/stateDir/mediaDir/settingsFile）继续有效，仅用于 legacy 机器人；
+- 解绑会写空凭据墓碑，不会因为 config 里还留着旧凭据而“复活”。
+
 ## 安装
 
 ### 前置条件
@@ -200,11 +275,14 @@ dsh plugin --profile web remove dsh-qqbot-buddy
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `appId` / `appSecret` | 空 | QQ 机器人凭据；也可用环境变量 `QQBOT_APPID` / `QQBOT_SECRET` |
-| `cwd` | `process.cwd()` | bot 工作目录（人设、memory、stickers 的相对基准） |
+| `cwd` | `process.cwd()` | bot 工作目录（人设、memory、stickers 的相对基准）；也是默认 `workspaceRoot` |
+| `workspaceRoot` | 空 = cwd | 多机器人工作区根：新建机器人在 `<root>/bots/<id>`，`bots.json` 也在根下 |
+| `maxBots` | `8` | 最多同时配置的机器人数（含 legacy 机器人） |
+| `registerTools` | `true` | 是否注册插件工具；测试/多实例部署可关 |
 | `preset` | `qqbot-buddy` | QQ agent 使用的 preset（由本包 patch 提供） |
 | `provider` / `model` | 空 | 空 = 宿主默认模型 |
-| `stateDir` | `~/.dsh-qqbot/buddy` | settings.json、人设备份、会话映射 |
-| `mediaDir` | `~/.dsh-qqbot/media` | 入站图片/视频/文件下载目录（与旧 persona 路径兼容） |
+| `stateDir` | `<cwd>/.qqbot/state` | settings.json、凭据、人设备份、会话映射（仅 legacy 机器人沿用） |
+| `mediaDir` | `<cwd>/.qqbot/media` | 入站图片/视频/文件下载目录（仅 legacy 机器人沿用） |
 | `textChunkLimit` | `4500` | 单条 QQ 消息最大字符数 |
 | `historyLimit` | `20` | 群聊历史上下文条数 |
 | `sessionIdleTimeout` | 30 分钟 | 闲置会话回收 |

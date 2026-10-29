@@ -17,6 +17,10 @@
         appId: ''
         appSecret: ''
         cwd: ''
+        # v0.16：多机器人工作区根；留空 = cwd。新建机器人在 <root>/bots/<id>，
+        # bots.json（机器人注册表）也在根下；凭据按机器人写在各自 stateDir/credentials.json。
+        workspaceRoot: ''
+        maxBots: 8
         preset: qqbot-buddy
         debug: false
 

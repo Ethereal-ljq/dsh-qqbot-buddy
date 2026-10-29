@@ -95,10 +95,15 @@ test('saveFact 写 MEMORY.md 与当日 notes，index hash 正确', (t) => {
   assert.match(daily, /- \[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[tool\] \[重要\] 用户称呼我小明，喜欢喝美式咖啡（#称呼 #偏好）/);
 
   const index = store.index();
-  assert.equal(index.version, 1);
+  assert.equal(index.version, 2, 'index.json 升级到 v2（importance/hits/lastHitAt）');
   assert.equal(index.facts.length, 1);
   const fact = index.facts[0];
-  assert.deepEqual(Object.keys(fact).sort(), ['at', 'file', 'hash', 'tags', 'text']);
+  assert.deepEqual(Object.keys(fact).sort(), [
+    'at', 'file', 'hash', 'hits', 'importance', 'lastHitAt', 'tags', 'text',
+  ]);
+  assert.equal(fact.importance, 'high');
+  assert.equal(fact.hits, 0);
+  assert.equal(fact.lastHitAt, '');
   assert.equal(fact.hash, sha16(text));
   assert.equal(fact.hash.length, 16);
   assert.deepEqual(fact.tags, ['称呼', '偏好']);
@@ -291,7 +296,7 @@ test('index.json 损坏时回退空索引并可继续保存', (t) => {
   store.ensure();
   fs.writeFileSync(path.join(dir, 'index.json'), '{ 这不是 JSON');
 
-  assert.deepEqual(store.index(), { version: 1, facts: [] });
+  assert.deepEqual(store.index(), { version: 2, facts: [] });
   const saved = store.saveFact({ text: '恢复后的第一条记忆' });
   assert.equal(saved.ok, true);
   assert.equal(store.index().facts.length, 1);

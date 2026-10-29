@@ -6,8 +6,13 @@ node_modules/
 # 否则会把 lib/memory/、lib/stickers/ 这些源码目录一起忽略）
 /memory/
 /stickers/
+/knowledge/
+/members/
+/bots/
+/bots.json
 /persona.md
 /settings.json
+/.qqbot/
 
 # 测试产物
 test/artifacts/

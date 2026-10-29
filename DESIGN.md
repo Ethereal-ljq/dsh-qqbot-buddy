@@ -935,3 +935,71 @@ createStickerStore({ settings, logger }) => {
 - prompt-guides.test.js 6（默认注入/关闭/覆盖/目录保留/群聊节奏条件/resolve 语义）
 - persona-cards-store.test.js 17；commands-admin.test.js 11；persona-cards-api.test.js 6；全仓 297+ 绿；
   浏览器 8 tab 截图 + 无 console/page error。
+
+# v0.16（2026-10-29）：多机器人 · 知识库 · 群友库 · 必要时涌现
+
+完整设计契约见 [`docs/MULTIBOT-KNOWLEDGE-DESIGN.md`](docs/MULTIBOT-KNOWLEDGE-DESIGN.md)，实现要点：
+
+## 多机器人
+
+- `lib/bots/registry.js`：`<workspaceRoot>/bots.json`（无密钥）+ 每机器人 `credentials.json`（0600）；
+  首次启动迁移 legacy 机器人（沿用旧 cwd/stateDir/settingsFile），旧数据原地可读。
+- `lib/bots/paths.js`：工作区目录解析（persona/memory/knowledge/members/stickers/state/media）。
+- `lib/bots/runtime.js`：一个机器人 = 一套 settings/persona/memory/knowledge/members/stickers/
+  collector/prompt/manager/gateway/binding；agent cwd = 该机器人工作区。
+- `lib/bots/host.js`：N 个运行时 + 工具全局注册一次 + facade（字段代理 active 机器人，旧路由兼容）。
+- `lib/bots/agent-map.js`：`Agent → BotRuntime`（WeakMap），工具 `execute(args, exec)` 按
+  `exec.agent` 路由；SessionManager 建会话时登记。
+- HTTP：所有接口支持 `?botId=`；新增 `/bots*`、`/knowledge*`、`/members*`、`/recall/preview`；
+  `/state` 的 bot 增加 id/name/legacy/workspaceDir/dirs；绑定接口支持按 botId 选择绑定服务。
+
+## 记忆 v2 与涌现
+
+- `memory/store.js`：index v2（importance/hits/lastHitAt）+ `recall(query, opts)` + `stats()`；
+  MEMORY.md 文本格式不变；v1 自动迁移。
+- `lib/context/emergence.js`：按当前消息从记忆/知识/群友检索，生成【本轮相关背景】；
+  prompt 新增 `recall` 段（priority 58），由 `record.turn.current` 提供本轮上下文；
+  无相关内容不注入。
+- `prompt.js`：`compose({scope, turn})` / `mount(agentCtx,{scope,turn,getTurn})`。
+
+## 知识库 / 群友库
+
+- `lib/entries/store.js`（通用条目库，frontmatter+markdown+index.json）、`lib/knowledge/store.js`、
+  `lib/members/store.js`（成员 id = sha1(openid)，visit 轻量累加，recallAlly 发言人优先）。
+- 工具：`knowledge_search/read/save`、`member_lookup/note`；能力目录默认开启（可在设置页关）。
+- 设置页：内容 → 知识库/群友库；概览 → 机器人列表/工作区与文件；记忆页新增相关性召回设置与预览。
+
+## 测试
+
+- `node --test test/*.test.js`（含 `bots-registry/bots-host/multibot-integration` 与队友新增用例）；
+- 隔离环境：`.dsh-dev`（3098）sync + restart 后 API/UI 验收，见 `.dsh-dev/docs/ui-verify-v016.md`。
+
+# v0.17（2026-10-30）：知识自动提炼 + 工具作用域收口
+
+## 知识自动提炼（阶段一）
+
+- 模块：`lib/knowledge/auto-extract.js`；接口
+  `createKnowledgeExtractor({ctx, settings, knowledge, logger, getRoute, callModel})` →
+  `{config, extractNow(record, {transcript, scope, groupId, groupHint}), noteTurnEnd(record), stats}`。
+- 触发：outbound `turn/end` 时 gateway 把记忆 collector 与知识 extractor 组成 composite 一起驱动；
+  每轮计数，达到 `settings.knowledge.autoExtract.everyRounds` 后台跑；也支持 API 手动触发（可传 transcript 试跑）。
+- 输出：模型返回 `{"knowledge":[{title,body,tags,importance,confidence,scope}]}`；
+  解析后按 `minConfidence` 分流：≥ 阈值 `status='approved'`，否则 `status='pending'`；
+  同标题同作用域合并（tags/importance），不重复建条目；单次最多 `maxEntries` 条。
+- 条目库新增 `status: approved|pending`（frontmatter + index 都落盘；旧文件/旧索引缺字段按 approved）；
+  `search/recall` 跳过 pending，`list` 支持 `status` 过滤，`stats` 暴露 pending 数。
+- API：`POST /knowledge/extract`、`GET /knowledge/extract/stats`、`POST /knowledge/approve`；
+  `GET /knowledge?status=`。
+- 设置：`knowledge.autoExtract = {enabled:false, everyRounds:6, maxEntries:3, minConfidence:0.8, provider:'', model:''}`。
+
+## 工具作用域收口（行为变化）
+
+- 新增 `lib/bots/scoped-tools.js`：`registerScopedTools(agentCtx, bot, logger)` 把插件工具
+  （memory_* / knowledge_* / member_* / qqbot_send_file / qqbot_sticker_save / qqbot_describe_image）
+  通过 `agentCtx.tools.register()` 注册到当前 agent 的 scope。
+- SessionManager `buildSetup` 第 4.6 步调用（仅 QQ 会话创建时），并用 `agentCtx.effect` 绑定清理；
+  host 不再在插件 ctx 上全局注册工具（删除 `lib/bots/tools.js`）。
+- 效果：只有 qqbot-buddy 创建的 agent（qqbot preset 或为机器人选的 preset）能看到这些工具；
+  宿主普通 agent / 其它 preset 的全局工具视图不再出现它们。
+- `applyToolWhitelist` 在 `restrict()` 前把 allow 过滤为「全局已注册工具名」，避免 scope 工具名导致白名单失败。
+- 兼容：各工具模块的旧注册签名保持可用（单机器人/单测），多机器人仍按 `exec.agent → BotRuntime` 路由。

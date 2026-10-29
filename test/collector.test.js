@@ -559,3 +559,58 @@ test('registerMemoryTools 在 tools 服务缺失时只告警不抛错', () => {
   assert.doesNotThrow(() => registerMemoryTools(throwing, { saveFact() {} }, logger2));
   assert.ok(logger2.sink.warns.some((line) => line.includes('异常')));
 });
+
+// ── recall 近重复抑制（记忆 v2 能力，memoryStore 没 recall 时行为不变） ──
+test('memoryStore 提供 recall 时抑制“包含式”近重复事实', async () => {
+  const stored = [];
+  const fakeStore = {
+    saved: [],
+    recall(query) {
+      const needle = String(query).normalize('NFKC').toLowerCase();
+      return stored
+        .map((text) => text.normalize('NFKC').toLowerCase())
+        .filter((text) => text === needle || text.includes(needle) || needle.includes(text))
+        .map((text) => ({ text, tags: [], importance: 'normal', at: new Date().toISOString(), score: 0.9 }));
+    },
+    saveFact(input) {
+      const key = input.text.trim();
+      if (stored.includes(key)) {
+        return { ok: true, duplicate: true, file: 'notes/x.md', entry: key, path: '/tmp/x.md' };
+      }
+      stored.push(key);
+      fakeStore.saved.push({ ...input });
+      return { ok: true, duplicate: false, file: 'notes/x.md', entry: key, path: '/tmp/x.md' };
+    },
+  };
+
+  const payloads = [
+    JSON.stringify({ facts: [{ text: '用户喜欢喝美式咖啡加冰' }] }),
+    JSON.stringify({ facts: [{ text: '用户喜欢喝美式咖啡加冰' }] }),
+    JSON.stringify({ facts: [{ text: '用户住在杭州' }] }),
+  ];
+  let call = 0;
+  const ctx = makeCtx({ streamFactory: (options) => makeJsonStream(payloads[call++])(options) });
+  const collector = createCollector({
+    ctx,
+    settings: makeSettings({ autoCollect: { everyRounds: 100 } }),
+    memoryStore: fakeStore,
+    logger: QUIET_LOGGER,
+  });
+
+  const first = await collector.collectNow(record([userMessage('我在喝咖啡')]));
+  assert.equal(first.ok, true);
+  assert.equal(fakeStore.saved.length, 1);
+  assert.deepEqual(first.skipped, []);
+
+  const second = await collector.collectNow(record([userMessage('再来一杯咖啡')]));
+  assert.equal(second.ok, true);
+  assert.equal(second.added.length, 0, '近重复事实不新增');
+  assert.equal(fakeStore.saved.length, 1);
+  assert.equal(second.skipped.length, 1);
+  assert.equal(second.skipped[0].reason, 'near-duplicate');
+
+  const third = await collector.collectNow(record([userMessage('我住在杭州')]));
+  assert.equal(third.ok, true);
+  assert.equal(third.added.length, 1, '真正的新事实仍然保存');
+  assert.equal(fakeStore.saved.length, 2);
+});
