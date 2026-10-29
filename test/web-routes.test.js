@@ -474,6 +474,7 @@ test('注册全部 API 路由，dispose 幂等', () => {
     '/knowledge/extract',
     '/knowledge/extract/stats',
     '/knowledge/approve',
+    '/members/adopt',
   ].map((suffix) => BASE + suffix);
   for (const fullPath of expected) assert.ok(server.routes.has(fullPath), '缺少路由 ' + fullPath);
   assert.equal(server.routes.size, expected.length);

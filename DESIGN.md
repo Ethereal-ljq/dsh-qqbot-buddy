@@ -1003,3 +1003,20 @@ createStickerStore({ settings, logger }) => {
   宿主普通 agent / 其它 preset 的全局工具视图不再出现它们。
 - `applyToolWhitelist` 在 `restrict()` 前把 allow 过滤为「全局已注册工具名」，避免 scope 工具名导致白名单失败。
 - 兼容：各工具模块的旧注册签名保持可用（单机器人/单测），多机器人仍按 `exec.agent → BotRuntime` 路由。
+# v0.18（2026-10-30）：群友备注自动提炼（阶段二）
+
+- `lib/knowledge/auto-extract.js` 扩展：
+  - `config()` 同时返回 `knowledge` / `members` 两段配置，`enabled` = 任一开启；
+  - prompt 按开关生成 knowledge / members 两类输出，一次模型调用完成；
+  - `parseExtractedResult()` 校验两类条目（知识标题/正文/标签/重要度/置信度/作用域；群友 name/openid/aliases/tags/note/confidence）；
+  - 群友处理：openid 优先、昵称/别名 + 当前群精确匹配；匹配不到跳过；
+    `confidence < minConfidence` 跳过；写入调用 members.applyAutoNote。
+- `lib/members/store.js` 新增：
+  - `save()` 人工保存非空备注 → `meta.notesSource='manual'`；
+  - `applyAutoNote({id,note,tags,confidence,at})`：空正文写正文（auto）/ 自动正文可更新 / 人工正文只追加 `meta.autoNotes`（去重、≤4）；
+  - `adoptAutoNote({id,index})`：采纳进正文、移除自动补充、标记 manual；
+  - `toItem()` 暴露 `autoNotes` / `notesSource`。
+- 设置：`members.autoExtract={enabled:false,maxNotes:2,minConfidence:0.8}`（布尔 true 兼容）。
+- API：`POST /members/adopt`；`POST /knowledge/extract` 返回 `membersUpdated/membersSkipped`。
+- UI：群友库页新增「自动提炼（群友备注）」卡片；详情页显示「自动补充」列表 + 「采纳到备注」按钮；
+  知识库提炼完成提示展示群友备注条数。

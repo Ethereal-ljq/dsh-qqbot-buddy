@@ -5288,6 +5288,18 @@ window.__ModuleLoader__.load({
         messageCount: messageCount,
         lastSeenAt: lastSeenAt,
         groupRows: groupRows,
+        autoNotes: (function () {
+          const source = Array.isArray(raw.autoNotes) ? raw.autoNotes : Array.isArray(meta.autoNotes) ? meta.autoNotes : [];
+          return source
+            .filter(function (item) { return item && typeof item.text === "string" && item.text !== ""; })
+            .map(function (item) {
+              return {
+                text: item.text,
+                at: timeMsOf(item.at),
+                confidence: typeof item.confidence === "number" ? item.confidence : 0,
+              };
+            });
+        })(),
       };
     }
 
@@ -6095,9 +6107,10 @@ window.__ModuleLoader__.load({
           const added = Array.isArray(result.added) ? result.added.length : 0;
           const pendingCount = Array.isArray(result.pending) ? result.pending.length : 0;
           const merged = Array.isArray(result.merged) ? result.merged.length : 0;
+          const memberNotes = Array.isArray(result.membersUpdated) ? result.membersUpdated.length : 0;
           const scanned = typeof result.scannedMessages === "number" ? result.scannedMessages : 0;
           setExtractNote(
-            "提炼完成：新增 " + added + " 条、待确认 " + pendingCount + " 条、合并 " + merged + " 条"
+            "提炼完成：新增知识 " + added + " 条、待确认 " + pendingCount + " 条、合并 " + merged + " 条、群友备注 " + memberNotes + " 条"
             + (scanned > 0 ? "（扫描 " + scanned + " 条消息）" : ""),
           );
           setExtractTranscript("");
@@ -6549,6 +6562,22 @@ window.__ModuleLoader__.load({
       const [groupId, setGroupId] = react.useState("");
       const [editor, setEditor] = react.useState(null);
       const [editorError, setEditorError] = react.useState("");
+      // 群友备注自动提炼（阶段二）
+      const membersAutoCfg = (function () {
+        const snapshot = props && props.snapshot ? props.snapshot : null;
+        const settings = snapshot && snapshot.settings ? snapshot.settings : null;
+        const membersSection = settings && settings.members ? settings.members : null;
+        const value = membersSection && membersSection.autoExtract ? membersSection.autoExtract : null;
+        return value && typeof value === "object" ? value : {};
+      })();
+      const [membersAutoStatus, runMembersAutoSave] = useSaver(props.reload);
+
+      function patchMembersAutoExtract(partial) {
+        const next = Object.assign({}, membersAutoCfg, partial || {});
+        void runMembersAutoSave(async function () {
+          await apiPost(API + "/settings", { patch: { members: { autoExtract: next } } });
+        }, "群友备注提炼设置已保存");
+      }
 
       const loadList = react.useCallback(async function () {
         setLoading(true);
@@ -6588,6 +6617,7 @@ window.__ModuleLoader__.load({
           notes: view.notes,
           tagsText: view.tags.join(", "),
           importance: view.importance,
+          autoNotes: view.autoNotes,
         });
         setEditorError("");
       }
@@ -6601,6 +6631,23 @@ window.__ModuleLoader__.load({
         setEditor(function (prev) {
           return prev ? Object.assign({}, prev, partial) : prev;
         });
+      }
+
+      /** 把一条自动补充采纳进人工备注（正文），随后从待采纳列表移除。 */
+      function adoptAutoNote(index) {
+        if (!editor) return;
+        const picked = Array.isArray(editor.autoNotes) ? editor.autoNotes[index] : null;
+        if (!picked) return;
+        const id = editor.view.id;
+        void run(async function () {
+          await apiPost(API + "/members/adopt", { id: id, index: index });
+          setEditor(function (prev) {
+            if (!prev) return prev;
+            const autoNotes = (Array.isArray(prev.autoNotes) ? prev.autoNotes : []).filter(function (_item, i) { return i !== index; });
+            const notes = prev.notes ? prev.notes + "\n" + picked.text : picked.text;
+            return Object.assign({}, prev, { autoNotes: autoNotes, notes: notes });
+          });
+        }, "已采纳到备注");
       }
 
       function saveMember() {
@@ -6634,6 +6681,46 @@ window.__ModuleLoader__.load({
       }
 
       const groupList = groupRowsOf(groupSource);
+
+      const autoCard = h(
+        Card,
+        { title: "自动提炼（群友备注）", hint: "每 N 轮从群聊补充长期备注；只补充，不覆盖人工备注" },
+        h(Switch, {
+          label: "启用群友备注提炼",
+          help: "默认关闭；与知识自动提炼共用一次模型调用，手动触发在「知识库 → 自动提炼」里",
+          checked: membersAutoCfg.enabled === true,
+          onChange: function (value) {
+            patchMembersAutoExtract({ enabled: value });
+          },
+        }),
+        h(
+          "div",
+          { className: "qqb-grid-2" },
+          h(NumberField, {
+            label: "单次最多备注",
+            help: "1-10，默认 2",
+            value: membersAutoCfg.maxNotes === undefined ? 2 : membersAutoCfg.maxNotes,
+            min: 1,
+            max: 10,
+            step: 1,
+            onChange: function (value) {
+              patchMembersAutoExtract({ maxNotes: value });
+            },
+          }),
+          h(NumberField, {
+            label: "置信度阈值",
+            help: "0-1，默认 0.8；低于阈值不写入",
+            value: membersAutoCfg.minConfidence === undefined ? 0.8 : membersAutoCfg.minConfidence,
+            min: 0,
+            max: 1,
+            step: 0.05,
+            onChange: function (value) {
+              patchMembersAutoExtract({ minConfidence: value });
+            },
+          }),
+        ),
+        h(StatusLine, { status: membersAutoStatus, dirty: false }),
+      );
 
       const editorCard = editor
         ? h(
@@ -6671,6 +6758,35 @@ window.__ModuleLoader__.load({
                 patchEditor({ notes: value });
               },
             }),
+            Array.isArray(editor.autoNotes) && editor.autoNotes.length > 0
+              ? h(
+                  "div",
+                  { className: "qqb-prompt-note" },
+                  h("p", { className: "qqb-help" }, "自动补充（不会覆盖人工备注，可一键采纳）："),
+                  editor.autoNotes.map(function (note, index) {
+                    return h(
+                      "div",
+                      { className: "qqb-toolbar", key: "auto-note-" + index },
+                      h(
+                        "span",
+                        { className: "qqb-help" },
+                        note.text + (note.confidence > 0 ? "（置信度 " + Math.round(note.confidence * 100) + "%）" : ""),
+                      ),
+                      h(
+                        "button",
+                        {
+                          type: "button",
+                          className: "qqb-btn qqb-btn--sm",
+                          onClick: function () {
+                            adoptAutoNote(index);
+                          },
+                        },
+                        "采纳到备注",
+                      ),
+                    );
+                  }),
+                )
+              : null,
             h(ChoiceGroup, {
               label: "重要度",
               value: importanceOf(editor.importance),
@@ -6889,7 +7005,7 @@ window.__ModuleLoader__.load({
           : null,
       );
 
-      return h("div", { className: "qqb-page" }, editorCard, listCard);
+      return h("div", { className: "qqb-page" }, editorCard, autoCard, listCard);
     }
 
     // ── 设置页 Section 主体（工作区导航） ──────────────────────

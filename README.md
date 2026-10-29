@@ -87,6 +87,22 @@ v0.16 把单机器人插件升级成**多机器人宿主**，并补齐长期记�
 - 工具解析仍然经 `exec.agent → BotRuntime`，多机器人互不串；agent 释放时作用域工具随 scope 自动清理。
 - 兼容：单元测试与旧单机器人模式不变（旧的 `registerSendFileTool` 等签名保持可用，用于独立单测）。
 
+### v0.18：群友备注自动提炼（阶段二）
+
+- 与知识自动提炼**共用一次模型调用**：同一段群聊里可以同时产出知识条目和群友备注。
+- 开关：`members.autoExtract = { enabled(默认 false), maxNotes(默认 2), minConfidence(默认 0.8) }`，
+  在「内容 → 群友库」页配置；知识页的「立即提炼」会同时驱动两者。
+- 匹配规则：优先按消息里的 `openid` 精确匹配成员；没有 openid 时按昵称/别名在当前群里精确匹配；
+  匹配不到**不会**凭空建成员（避免垃圾条目）。
+- 写入规则（重点）：**默认不覆盖人工备注**
+  - 成员还没有备注 → 自动备注写进正文，标记 `notesSource=auto`；
+  - 正文是之前自动写的 → 允许更新；
+  - 正文是人工写的（UI/工具保存过）→ 正文不动，只追加到 `meta.autoNotes`（去重、最多 4 条），
+    群友详情里显示「自动补充」，可一键「采纳到备注」（采纳后变人工备注并移除该补充）。
+- 标签会自动合并（去重，最多 12 个）；低置信（< 阈值）直接跳过、不写。
+- API：`POST /members/adopt {id, index}` 采纳自动补充；`GET /members` 列表项新增 `autoNotes` / `notesSource`；
+  `POST /knowledge/extract` 返回值新增 `membersUpdated / membersSkipped`。
+
 ### 数据布局（每个机器人一个工作区）
 
 ```
