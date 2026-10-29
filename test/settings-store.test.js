@@ -466,8 +466,27 @@ test('stickers：默认目录指向 <cwd>/stickers，允许收藏、单张上限
     collectEnabled: true,
     maxMB: 8,
     dailyLimit: 10,
+    // 发送频率只影响提示词节奏指引，默认 normal（与旧行为一致：大概每 3~5 轮）
+    frequency: 'normal',
   });
   assert.deepEqual(store.get().stickers, defaults.stickers);
+});
+
+test('stickers.frequency：默认 normal，只接受已知档位，未知值回退 normal', async (t) => {
+  const { store } = makeStore(t);
+  assert.equal(store.get().stickers.frequency, 'normal');
+
+  for (const level of ['off', 'rare', 'normal', 'often']) {
+    const result = await store.patch({ stickers: { frequency: level } });
+    assert.equal(result.settings.stickers.frequency, level, '应接受档位 ' + level);
+  }
+
+  const bad = await store.patch({ stickers: { frequency: 'always' } });
+  assert.equal(bad.settings.stickers.frequency, 'normal', '未知档位应回退 normal');
+
+  const other = await store.patch({ stickers: { frequency: 'rare' } });
+  assert.equal(other.settings.stickers.frequency, 'rare', '切档应立即生效');
+  assert.deepEqual(other.changed, ['stickers.frequency'], '只改 frequency 时变更列表只应有这一项');
 });
 
 test('stickers：深合并单个字段，不影响同段其它字段', async (t) => {
@@ -722,8 +741,13 @@ test('phrases：默认开启、条目空；文本 trim/截断、去重（大小�
 
 test('settings.prompts：默认四段启用且 text 为空；开关/文本归一化，非法值回退', async (t) => {
   const { store, defaults } = makeStore(t);
-  assert.deepEqual(Object.keys(defaults.prompts).sort(), ['rhythmGuide', 'sendGuide', 'stickerGuide', 'toolGuide']);
-  for (const key of Object.keys(defaults.prompts)) {
+  // v0.11 起 prompts 多一个 sections（分段覆盖表），其余仍是四段引导词
+  assert.deepEqual(
+    Object.keys(defaults.prompts).sort(),
+    ['rhythmGuide', 'sections', 'sendGuide', 'stickerGuide', 'toolGuide'],
+  );
+  assert.deepEqual(defaults.prompts.sections, {}, 'sections 默认空（全部走内置默认）');
+  for (const key of ['rhythmGuide', 'sendGuide', 'stickerGuide', 'toolGuide']) {
     assert.equal(defaults.prompts[key].enabled, true, key + ' 默认启用');
     assert.equal(defaults.prompts[key].text, '', key + ' 默认空文本（用内置默认）');
   }
@@ -747,4 +771,45 @@ test('settings.tools.extraAllowed：默认空、去空去重、长度截断、�
   assert.equal(tooMany.settings.tools.extraAllowed.length, 50);
   const invalid = await store.patch({ tools: { extraAllowed: 'skill' } });
   assert.deepEqual(invalid.settings.tools.extraAllowed, []);
+});
+
+test('settings.patchReplace：集合型字段可整体替换（深合并删不掉键）', async () => {
+  const s = await import('../lib/settings-store.js');
+  const nodeFs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-st-'));
+  const file = path.join(dir, 'settings.json');
+  const store = s.createSettingsStore({ file, defaults: s.resolveDefaults({ cwd: dir }), logger: { warn() {}, error() {} } });
+
+  await store.patchReplace({ tools: { capabilityEntries: { a: { tools: ['x'] } } } }, ['tools.capabilityEntries']);
+  assert.deepEqual(Object.keys(store.get().tools.capabilityEntries), ['a']);
+
+  // 普通 patch 清空 -> 无效（深合并）
+  await store.patch({ tools: { capabilityEntries: {} } });
+  assert.deepEqual(Object.keys(store.get().tools.capabilityEntries), ['a'], '深合并不应删除键');
+
+  // patchReplace -> 真正清空
+  await store.patchReplace({ tools: { capabilityEntries: {} } }, ['tools.capabilityEntries']);
+  assert.deepEqual(store.get().tools.capabilityEntries, {}, 'patchReplace 应整体替换');
+});
+
+test('prompts.sections：patchReplace 可整体清空（深合并删不掉键）', async () => {
+  const s = await import('../lib/settings-store.js');
+  const nodeFs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-sec-'));
+  const store = s.createSettingsStore({ file: path.join(dir, 'settings.json'), defaults: s.resolveDefaults({ cwd: dir }), logger: { warn() {}, error() {} } });
+
+  await store.patchReplace({ prompts: { sections: { safety: { enabled: true, text: '自定义安全' } } } }, ['prompts.sections']);
+  assert.equal(store.get().prompts.sections.safety.text, '自定义安全');
+
+  // 普通 patch 清空无效（深合并）
+  await store.patch({ prompts: { sections: {} } });
+  assert.ok(store.get().prompts.sections.safety, '深合并不应删除分段覆盖');
+
+  // patchReplace 清空生效
+  await store.patchReplace({ prompts: { sections: {} } }, ['prompts.sections']);
+  assert.deepEqual(store.get().prompts.sections, {}, 'patchReplace 应清空分段覆盖');
 });

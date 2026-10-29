@@ -73,10 +73,9 @@ test('编辑卡内容：非激活卡只改卡文件；激活卡同步人设（�
   const editedA = store.update(a.card.id, { content: '人格 A2\n' });
   assert.equal(editedA.ok, true);
   assert.equal(store.read(a.card.id).content, '人格 A2\n');
-  assert.equal(editedA.activeId, null, '改内容后与当前人设不一致 -> 变 custom');
-  const reapplied = store.activate(a.card.id);
-  assert.equal(reapplied.ok, true);
-  assert.match(fs.readFileSync(personaFile, 'utf8'), /人格 A2/, 'activate 后同步人设');
+  // v0.11：覆盖「激活卡」时 update 直接同步人设，保持激活不漂移
+  assert.equal(editedA.activeId, a.card.id, '覆盖激活卡后仍应保持激活');
+  assert.match(fs.readFileSync(personaFile, 'utf8'), /人格 A2/, '覆盖激活卡应同步人设');
   const backups = fs.readdirSync(path.join(path.dirname(personaFile), '..', 'state', 'persona-backups')).filter((n) => n.endsWith('.md'));
   assert.equal(backups.length > 0, true, '同步人设时应产生备份');
 });

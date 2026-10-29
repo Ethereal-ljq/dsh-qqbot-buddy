@@ -191,11 +191,13 @@ test('update 改名称/描述/内容，updatedAt 更新且 active 随内容变�
   assert.equal(contentUpdated.custom, false);
   assert.equal(fs.readFileSync(path.join(cardsDir, created.card.file), 'utf8'), '内容B');
 
-  // 再改成不一致 → 变回 custom（人设文件未变）
+  // 此时卡已是激活卡（内容 == 人设），再覆盖它 → 人设同步更新，保持激活不漂移。
+  // 这是 v0.11 的语义修正：覆盖「激活卡」必须同步人设，否则内容不一致会导致
+  // activeId 漂移/变 custom，用户看到的就是"覆盖没生效"。
   const again = store.update(id, { content: '内容C' });
-  assert.equal(again.activeId, null);
-  assert.equal(again.custom, true);
-  assert.equal(personaStore.text, '内容B', 'update 不应改写当前人设');
+  assert.equal(again.activeId, id, '覆盖激活卡后仍应保持激活');
+  assert.equal(again.custom, false);
+  assert.equal(personaStore.read().text.trimEnd(), '内容C', '覆盖激活卡应同步人设');
 
   // 错误分支
   assert.match(store.update(randomUUID(), { name: 'x' }).error, /不存在/);
@@ -442,4 +444,92 @@ test('logger 可缺省、cwd 可缺省时仍能工作', (t) => {
   assert.equal(store.dir(), path.join(base, 'personas'));
   const created = store.create({ name: '默认 cwd', content: '内容' });
   assert.equal(created.ok, true);
+});
+
+test('update：覆盖「当前激活卡」时应同步写入人设，保持激活状态不漂移', async () => {
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const nodeFs = await import('node:fs');
+  const { createPersonaCardsStore } = await import('../lib/persona-cards-store.js');
+  const { createPersonaStore } = await import('../lib/persona-store.js');
+
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-card-'));
+  const stateDir = path.join(dir, 'state');
+  nodeFs.mkdirSync(stateDir, { recursive: true });
+  const settings = { get: () => ({ persona: { path: path.join(dir, 'persona.md') } }) };
+  const logger = { warn() {}, info() {}, debug() {} };
+  const personaStore = createPersonaStore({ settings, stateDir, logger });
+  const cards = createPersonaCardsStore({ personaStore, cwd: dir, logger });
+
+  personaStore.write('原始人设内容\n第二行');
+  const created = cards.create({ name: '卡A', content: '原始人设内容\n第二行' });
+  assert.ok(created && created.ok !== false, '创建卡应成功');
+  const id = created.card.id;
+  const activated = cards.activate(id);
+  assert.ok(activated && activated.ok === true, '激活应成功');
+
+  // 取人设当前值（含写入补的换行），再覆盖同一张卡
+  const current = personaStore.read().text;
+  const updated = cards.update(id, { content: current.trimEnd() });
+  assert.ok(updated && updated.ok !== false, '覆盖应成功');
+  assert.equal(updated.activeId, id, '覆盖后仍应是这张卡处于激活状态');
+  assert.equal(updated.card.active, true, '覆盖后卡片应保持 active');
+  assert.equal(updated.custom, false, '不应变成自定义状态');
+});
+
+test('update：覆盖「非激活卡」只改卡文件，不动人设', async () => {
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const nodeFs = await import('node:fs');
+  const { createPersonaCardsStore } = await import('../lib/persona-cards-store.js');
+  const { createPersonaStore } = await import('../lib/persona-store.js');
+
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-card2-'));
+  const stateDir = path.join(dir, 'state');
+  nodeFs.mkdirSync(stateDir, { recursive: true });
+  const settings = { get: () => ({ persona: { path: path.join(dir, 'persona.md') } }) };
+  const logger = { warn() {}, info() {}, debug() {} };
+  const personaStore = createPersonaStore({ settings, stateDir, logger });
+  const cards = createPersonaCardsStore({ personaStore, cwd: dir, logger });
+
+  personaStore.write('当前人设');
+  const a = cards.create({ name: '卡A', content: '当前人设' });
+  const b = cards.create({ name: '卡B', content: '另一份人设' });
+  cards.activate(a.card.id);
+  const before = personaStore.read().text;
+
+  const updated = cards.update(b.card.id, { content: '另一份人设v2' });
+  assert.ok(updated && updated.ok !== false);
+  assert.equal(personaStore.read().text, before, '非激活卡覆盖不应改人设');
+  assert.equal(updated.activeId, a.card.id, '激活卡仍是 A');
+});
+
+test('删除人格卡：先备份到 .trash/，误删可恢复', async () => {
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const nodeFs = await import('node:fs');
+  const { createPersonaCardsStore } = await import('../lib/persona-cards-store.js');
+  const { createPersonaStore } = await import('../lib/persona-store.js');
+
+  const dir = nodeFs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-del-'));
+  const stateDir = path.join(dir, 'state');
+  nodeFs.mkdirSync(stateDir, { recursive: true });
+  const settings = { get: () => ({ persona: { path: path.join(dir, 'persona.md') } }) };
+  const logger = { warn() {}, info() {}, debug() {} };
+  const personaStore = createPersonaStore({ settings, stateDir, logger });
+  const cards = createPersonaCardsStore({ personaStore, cwd: dir, logger });
+
+  const created = cards.create({ name: '要删的卡', content: '会被误删的人设内容' });
+  assert.ok(created && created.ok !== false);
+  const id = created.card.id;
+
+  const deleted = cards.delete(id);
+  assert.ok(deleted && deleted.ok === true, '删除应成功');
+  assert.ok(typeof deleted.trashPath === 'string' && deleted.trashPath !== '', '应返回备份路径');
+  assert.equal(nodeFs.existsSync(deleted.trashPath), true, '备份文件应存在');
+  assert.equal(nodeFs.readFileSync(deleted.trashPath, 'utf8'), '会被误删的人设内容', '备份内容应与原卡一致');
+
+  // 正式卡文件已删、索引里也没有
+  const list = cards.list();
+  assert.equal(list.cards.some((c) => c.id === id), false, '索引里不应再有该卡');
 });

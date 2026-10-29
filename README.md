@@ -239,26 +239,46 @@ dsh plugin --profile web remove dsh-qqbot-buddy
   - `/resume`：恢复上一个被 `/new` 替换掉的会话（带回之前的上下文，可连续恢复多个）
   - `/stop`：中止当前生成；`/status`：状态/频率/可恢复会话数/统计；`/help`；`/ping`
 
-## 扩展能力：skill / 插件工具
+## 能力边界：显式管理 bot 能用哪些工具
 
-- 内置组合默认只放行本插件工具（memory_* / qqbot_* / 按开关挂载的 fs/web），**skill 与第三方插件工具默认不可用**。
-- 两种放行方式：
-  1. **额外放行工具**（推荐）：设置 → Agent 与模型 →「额外放行工具」，每行一个工具名，例如 `skill`、MCP 工具名。
-     内置组合下会被加入白名单；切宿主预设时会从屏蔽名单里移除。保存后建议点「应用到当前会话」。
-  2. **切换宿主预设**：Agent preset 选 `standard` / `ptc` / `cordis`，此时插件改用「屏蔽名单」策略
-     （只屏蔽团队/画布/图片生成等），该预设带的工具（含 skill、MCP）会放行；代价是可能一并带来 bash/pty 等宿主工具。
-- 放行 `skill` 时插件会**自动按需挂载** `dsh-skill-filesystem` + `dsh-tool-skill`（内置组合 preset 只有 compaction，
-  否则技能工具不会存在）；技能来自 `~/.dsh/skills`，目录通过 `agent/pre-step` 注入（不是 system prompt 段），
-  所以人设 replace 模式不会把它弄丢。
-- 同理，放行 MCP / 第三方插件工具时，需要宿主或对应插件已经把工具注册出来；插件只负责"允许它出现"，不负责安装。
+**默认拒绝**：只有被「已启用能力」授权的工具名才会给到模型，其余一律屏蔽——
+不再维护"要屏蔽哪些工具"的黑名单（那样新装的插件默认会漏进来）。
 
-## Agent 预设与功能开关
+能力表是唯一真相（`lib/tools/catalog.js`），挂载、白名单、assembly 过滤、技能提示都从它派生：
 
-- **内置组合（推荐）**：preset 只负责 compaction；工作区/联网工具由插件在创建 agent 时按开关动态挂载。
-- **宿主 preset**：可从宿主 agent preset 列表选择（如 standard/ptc）。此时工作区/联网开关由该 preset 决定，
-  表情包/看图/长期记忆开关仍然生效（通过全局工具白名单）。
-- 开关（设置 → Agent）：`workspace`（读写/glob/grep）、`web`（web_search/web_fetch）、
-  `stickers`（qqbot_send_file）、`vision`（qqbot_describe_image）、`memory`（memory_*）。
+| 能力 | 放行的工具 | 备注 |
+|---|---|---|
+| `workspace` 工作区读写 | read / write / edit / glob / grep | 按需挂 dsh-tool-fs(+search) |
+| `web` 联网 | web_search / web_fetch | 按需挂 dsh-tool-web |
+| `memory` 长期记忆 | memory_save / memory_search / memory_read / memory_list | 受 `memory.enabled` 二次约束 |
+| `stickers` 表情包 | qqbot_send_file / qqbot_sticker_save | 关闭收藏后只剩发送 |
+| `vision` 看图片 | qqbot_describe_image | |
+| `skills` 技能 | skill | **默认关闭**，见下节 |
+| `imagegen` 图片生成 | generate_image / generate_images / edit_image / find_inspiration | **默认关闭**；工具来自宿主插件，打开即用 |
+
+- 开关位置：`settings.tools.capabilities`（`workspace/web/memory/stickers/vision` 沿用 `settings.features`）。
+- **宿主 preset 也走同一份白名单**：不再有手写屏蔽名单，预设自带的 bash/团队/画布等工具默认不进 QQ 会话；
+  确实需要时用 `settings.tools.extraAllowed` 显式放行（MCP / 第三方插件工具同理：插件只负责"允许出现"，不负责安装）。
+- 诊断：`GET /api/tools` 返回每项能力的启用状态、放行的工具、已挂载插件与可见技能，便于排障。
+
+## 技能（skills）的过滤
+
+- 宿主 `dsh-skill-filesystem` **没有"按名过滤"能力**，所以本插件自带一个 provider
+  （`lib/skills/provider.js`），按宿主公开的 `ctx.skills.registerProvider()` 契约注册，
+  只把白名单里的技能暴露给 agent——**不改宿主、不动 `~/.dsh/skills`**。
+- 策略：`settings.tools.skills = { mode: 'all' | 'allow', allowed: ['bili-get'] }`
+  - `mode: 'all'`：本机全部技能可见（等价旧版 `extraAllowed: ['skill']`，升级时自动迁移）；
+  - `mode: 'allow'`：只暴露 `allowed` 里的技能；
+  - 能力开关关闭：连 `skill` 工具都不挂。
+- 技能扫描与宿主一致：`~/.dsh/skills`、`~/.agents/skills`、项目 `.dsh/skills` / `.agents/skills`，
+  只扫一层（`<name>/SKILL.md` 或 `<name>.md`），frontmatter 规则与宿主相同。
+- 提示词里的【技能】段按**当前可见技能**动态生成，装/删技能会自动跟随，不再写死技能名。
+
+## Agent 预设与能力开关的关系
+
+- **内置组合（推荐）**：preset 只负责 compaction；工具由插件在创建 agent 时按能力开关动态挂载。
+- **宿主 preset**（standard/ptc 等）：该预设自带的工具**不会自动放行**，仍受上面同一份能力白名单约束。
+  想要哪个就在 `tools.extraAllowed` 里显式列出——这样"bot 能用什么"始终由本插件说了算。
 - 修改只影响**新会话**；点「应用到当前会话」会重置 bot 会话（清空上下文）。
 
 ## 看图（视觉理解）
@@ -398,16 +418,37 @@ memory/
 
 ## 设置页
 
-dsh Web → 设置（左下角）→「QQ 机器人」：
+dsh Web → 设置（左下角）→「QQ 机器人」。分区按**「要回答的问题」**组织：
+顶部 6 个工作区（官方 tab 形态，页数写在标签里，如 `提示词 (6)`），工作区内再用胶囊 chip 切换具体页面
+（窄面板下是横向 chip 行，面板够宽时自动变成左栏）。
 
-- **概览**：连接/绑定卡片（未绑定时显示二维码、刷新与手动填写；已绑定显示解绑）、收发统计、当前生效策略、待回复计数、当前模型。
-- **回复频率**：模式（含「自适应（推荐）」）、阈值/超时兜底/间隔/概率、adaptive 的静默/冷却/最长等待/只回问句与媒体、私聊开关。
-- **触发规则**：@必回、回复必回、关键词。
-- **Agent**：agent preset 选择（首项「内置组合（推荐）」）、工作区/联网/表情包/看图/长期记忆 5 个功能开关、保存、「应用到当前会话」。
-- **表情包**：目录与上限展示、每日收藏上限、启用表情包/允许 bot 收藏开关、缩略图网格（编辑情绪/标签/备注、删除）、上传新表情。
-- **模型**：provider / model / reasoningEffort 选择（首项「跟随宿主默认」）、保存、「应用到当前会话」。
-- **人设**：编辑器、replace/append、运行时上下文开关、群聊/私聊额外指令、备份回滚。
-- **自我改进**：记忆开关、目录、注入上限、自动提炼参数、记忆文件查看/编辑/新建、立即提炼、prompt 预览。
+界面风格与 dsh 官方 primitives / 插件市场一致：**无 emoji、无彩色装饰**，只用字号/字重/灰阶与 1px 细线分层；
+颜色全部走 `--dsw-alias-*` 令牌，浅色与深色主题都自动适配。
+
+| 工作区 | 页面 | 干什么 |
+| --- | --- | --- |
+| 概览 | 状态总览 | 连接状态、扫码/手动绑定、收发统计、当前生效策略、维护操作、运行路径 |
+| 对话 | 回复策略 | 总开关、群聊模式（含「自适应（推荐）」）、阈值/兜底/间隔/概率、adaptive 参数、私聊开关 |
+| | 触发规则 | @必回、引用必回、必回关键词 |
+| | 语气与分条 | 气泡拆分（行为的"发几条"）+ 消息格式、群聊节奏两段提示词 |
+| 能力 | 模型与预设 | provider / model / reasoningEffort、Agent preset、应用到当前会话 |
+| | 能力与工具 | 能力开关（默认拒绝）、技能白名单、实际生效工具、未归类工具一键放行、额外放行 |
+| 提示词 | 组装顺序 | 12 段各排第几位、本次是否注入，带「去编辑」 |
+| | 身份与人格 | 人设正文、人格卡、人设模式、群聊/私聊专属补充 |
+| | 说话方式 | 消息格式与长短 + 群聊节奏（纯提示词） |
+| | 口头禅 | 从对话/记忆里学到的口癖 |
+| | 工具约定 | 每个工具该怎么用 |
+| | 最终提示词 | 拼好的完整 prompt（只读，用来校验） |
+| 内容 | 表情包 | 开关 / 收藏上限 / **发送频率** → 表情包使用规则（提示段）→ 表情库 → 上传/删除 |
+| | 记忆与自我改进 | 记忆开关/目录/注入上限、记忆文件、手记、立即提炼、自动收集参数、prompt 预览 |
+| 权限 | 命令与管理员 | 全部 / 命令与用法；谁会改变状态的命令 |
+| | 安全红线 | 不泄露密钥配置、不越权（提示段） |
+
+「表情包使用规则」这一页写的是 `settings.prompts.sections.stickers`（注入 system prompt 的【表情包】段），
+管"什么时候发、发几张、要不要解释"；它和"能不能发 / 库里有什么"是两回事，所以放在同一页但分开两张卡。
+
+旧链接（`navigate("reply")` / `"tools"` / `"prompts"` 等）由 `VIEW_ALIASES` 自动映射到新位置；
+服务端结构升级但页面没刷新时，`itemsOf()` 会退回旧的 `children` 列表，不会白屏。
 
 ## 扫码绑定（移植官方流程）
 

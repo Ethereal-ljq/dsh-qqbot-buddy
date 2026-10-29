@@ -1,5 +1,15 @@
 /**
- * test/e2e/features-probe.js —— 功能开关探针（仅 QA 隔离验收用，不属于插件运行时）。
+ * test/e2e/features-probe.js —— 【已过时，v0.8 起被 capability-probe.js 取代】
+ *
+ * v0.8 把「工具白名单」统一成能力目录（显式允许 + 默认拒绝），本探针里断言的
+ * 旧契约（默认白名单不含 fs/web 工具、workspace/web 关闭时白名单不变、
+ * 宿主 preset 走手写 deny 黑名单）已经全部不成立。
+ *
+ * 新的验收入口：scripts/blank-profile-test.sh + test/e2e/capability-probe.js
+ * 本文件仅保留作历史参考，不要再用 --probe 跑它。
+ *
+ * ---- 以下为原始说明 ----
+ * 功能开关探针（仅 QA 隔离验收用，不属于插件运行时）。
  *
  * 用法：通过 test-profile.sh 的 overlay insert 挂载，config:
  *   { outFile: <结果 JSON 路径>, pluginEntry: <profile node_modules 里的 lib/index.js 绝对路径> }

@@ -11,24 +11,42 @@ window.__ModuleLoader__.load({
     const API = "/qqbot-buddy/api";
     /** 样式注入标记：重复加载时先移除再注入，保证样式总是当前版本 */
     const STYLE_ID = "qqbot-buddy-settings-style";
-    // 第四批重构：8 个 tab（频率+触发合并为“回复与触发”，Agent+模型合并为“Agent 与模型”）
-    const TABS = [
-      { id: "overview", label: "概览" },
-      { id: "reply", label: "回复与触发" },
-      { id: "agent", label: "Agent 与模型" },
-      { id: "persona", label: "人设" },
-      { id: "phrases", label: "口头禅" },
-      { id: "stickers", label: "表情包" },
-      { id: "memory", label: "记忆与自我改进" },
-      { id: "commands", label: "命令与权限" },
-    ];
-    /** 功能开关（顺序与 DESIGN settings.features 一致）。 */
+    /**
+     * 设置页 IA（v0.9 精简）：每个 tab 只负责一件事。
+     *   概览       —— 只读状态 + 少量运维
+     *   对话与触发 —— 什么时候回、回多少（频率/触发/消息格式/节奏）
+     *   能力与工具 —— 能用什么（预设/能力/技能/工具/工具约定）
+     *   模型       —— 用哪个模型
+     *   人设与口吻 —— 它是谁、怎么说（人设/人格卡/口头禅）
+     *   表情包     —— 表情库与使用规则
+     *   记忆       —— 记什么、怎么记
+     *   命令与权限 —— QQ 命令与管理员
+     */
+    /**
+     * 能力清单（与 lib/tools/catalog.js 的 CAPABILITIES 对应）。
+     * store: 'features' = 存 settings.features（旧键）；'capabilities' = 存 settings.tools.capabilities。
+     */
     const FEATURE_ITEMS = [
-      { key: "workspace", label: "工作区访问", help: "fs 读写/编辑 + glob/grep 工具" },
-      { key: "web", label: "联网搜索", help: "web_search / web_fetch 抓取网页" },
-      { key: "stickers", label: "表情包", help: "qqbot_send_file 发送图片/文件" },
-      { key: "vision", label: "看图", help: "qqbot_describe_image 理解图片内容" },
-      { key: "memory", label: "长期记忆", help: "memory_save/search/read/list 记忆工具" },
+      { key: "workspace", label: "工作区访问", store: "features", help: "fs 读写/编辑 + glob/grep 工具" },
+      { key: "web", label: "联网搜索", store: "features", help: "web_search / web_fetch 抓取网页" },
+      { key: "stickers", label: "表情包", store: "features", help: "qqbot_send_file 发送图片/文件" },
+      { key: "vision", label: "看图", store: "features", help: "qqbot_describe_image 理解图片内容" },
+      { key: "memory", label: "长期记忆", store: "features", help: "memory_save/search/read/list 记忆工具" },
+      { key: "skills", label: "技能（skills）", store: "capabilities", help: "skill 工具 + 按白名单暴露技能；默认关闭" },
+      { key: "imagegen", label: "图片生成（image-gen）", store: "capabilities", help: "generate_image / edit_image 等；需宿主装 image-gen 插件" },
+      { key: "shell", label: "执行命令（shell）", store: "capabilities", help: "bash 工具：跑脚本/命令行。技能（如 bili-get 转写）依赖它；风险较高，默认关闭" },
+    ];
+    /** 技能策略模式选项。 */
+    const SKILL_MODE_OPTIONS = [
+      { id: "allow", name: "仅白名单（推荐）" },
+      { id: "all", name: "全部可见" },
+    ];
+    /** 表情包发送频率（键必须与 lib/prompt-guides.js 的 STICKER_FREQUENCY_LINES 一致）。 */
+    const STICKER_FREQUENCY_OPTIONS = [
+      { value: "off", label: "不发" },
+      { value: "rare", label: "偶尔" },
+      { value: "normal", label: "正常" },
+      { value: "often", label: "偏多" },
     ];
     /** reasoningEffort 下拉选项（空 = 跟随模型 / 宿主默认）。 */
     const EFFORT_OPTIONS = [
@@ -200,99 +218,171 @@ window.__ModuleLoader__.load({
       return MODEL_SOURCE_LABELS[source] || "宿主默认";
     }
 
-    // ── 样式（只注入一次；类名前缀 qqb-，主题变量带兜底） ────
+    // ── 样式（只注入一次；类名前缀 qqb-，与 dsh 官方 primitives / 插件市场同一套设计令牌） ──
+    // 设计语言：无 emoji、无彩色装饰；层次靠字号/字重/灰阶与 1px 细线表达。
+    // 所有颜色都走 --dsw-alias-* 令牌（浅色/深色主题自动跟随），fallback 只是兜底。
     const STYLE_TEXT = [
-      ".qqb-root { display: flex; flex-direction: column; gap: 14px; width: 100%; font-size: 13px; line-height: 1.55; color: var(--dsw-alias-label-primary, #1f2328); }",
-      ".qqb-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }",
-      ".qqb-head-main { display: flex; flex-direction: column; gap: 2px; }",
-      ".qqb-title { margin: 0; font-size: 16px; font-weight: 600; }",
-      ".qqb-sub { margin: 0; font-size: 12px; opacity: 0.7; }",
-      ".qqb-head-status { display: flex; align-items: center; gap: 8px; }",
-      ".qqb-badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12px; border: 1px solid transparent; }",
-      ".qqb-badge--ok { color: var(--dsw-alias-success, #1a7f37); background: rgba(26, 127, 55, 0.12); border-color: rgba(26, 127, 55, 0.3); }",
-      ".qqb-badge--warn { color: var(--dsw-alias-warning, #9a6700); background: rgba(154, 103, 0, 0.12); border-color: rgba(154, 103, 0, 0.3); }",
-      ".qqb-badge--off { opacity: 0.65; border-color: var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35)); }",
-      ".qqb-tabs { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 8px; border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.22)); }",
-      ".qqb-tab { font: inherit; font-size: 13px; padding: 5px 14px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: inherit; cursor: pointer; opacity: 0.75; }",
-      ".qqb-tab:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12)); opacity: 1; }",
-      ".qqb-tab--active { background: var(--dsw-alias-brand, #4d6bfe); color: #fff; opacity: 1; }",
+      ".qqb-root { container-type: inline-size; display: flex; flex-direction: column; gap: 14px; width: 100%; font-size: 13px; line-height: 1.55; color: var(--dsw-alias-label-primary, #1f2328); }",
+      // 页头：标题 16/500 + 版本灰字 + 右侧状态与刷新
+      ".qqb-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 2px 2px 0; }",
+      ".qqb-head-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }",
+      ".qqb-title-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }",
+      ".qqb-title { margin: 0; font-size: 16px; line-height: 24px; font-weight: 500; }",
+      ".qqb-tab:focus-visible, .qqb-side-item:focus-visible, .qqb-btn:focus-visible, .qqb-switch:focus-visible, .qqb-seg-btn:focus-visible, .qqb-sticker-card:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #4f6ef7); outline-offset: 1px; }",
+      ".qqb-version { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      ".qqb-sub { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      ".qqb-head-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }",
+      // 状态徽标：不填色，用细边框 + 语义色文字
+      ".qqb-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary, #6b7280); border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); }",
+      ".qqb-badge::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: currentColor; opacity: 0.75; }",
+      ".qqb-badge--ok { color: var(--dsw-alias-state-success-primary, #1a7f37); border-color: color-mix(in srgb, currentColor 35%, transparent); }",
+      ".qqb-badge--warn { color: var(--dsw-alias-state-warn-primary, #9a6700); border-color: color-mix(in srgb, currentColor 35%, transparent); }",
+      ".qqb-badge--off { color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      ".qqb-toast { max-width: 320px; padding: 3px 10px; border-radius: 6px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary, #6b7280); border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-2, #f7f8fa); }",
+      // 一级导航：官方 tab 形态（文字 + 2px 底线），页数写在 label 里
+      ".qqb-tabs { display: flex; flex-wrap: wrap; gap: 2px; align-items: flex-end; border-bottom: 1px solid var(--dsw-alias-border-l2, #e5e7eb); padding: 0 2px; }",
+      ".qqb-tab { font: inherit; font-size: 13px; line-height: 20px; padding: 7px 12px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--dsw-alias-label-secondary, #6b7280); cursor: pointer; white-space: nowrap; }",
+      ".qqb-tab:hover { color: var(--dsw-alias-label-primary, #1f2328); }",
+      ".qqb-tab--active { color: var(--dsw-alias-brand-primary, #4f6ef7); border-bottom-color: var(--dsw-alias-brand-primary, #4f6ef7); font-weight: 600; }",
+      // 工作区：默认窄容器（竖排：二级导航行 + 内容）
+      ".qqb-workspace { display: flex; flex-direction: column; gap: 12px; }",
+      ".qqb-side { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }",
+      ".qqb-side-head { display: none; }",
+      ".qqb-side-desc { display: none; }",
+      ".qqb-side-title { font-size: 12px; font-weight: 500; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      ".qqb-side-count { display: none; font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      ".qqb-side-list { display: flex; flex-wrap: wrap; gap: 6px; }",
+      // 二级导航：胶囊 chip（官方 capChip 形态）
+      ".qqb-side-item { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; line-height: 18px; padding: 3px 11px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: none; color: var(--dsw-alias-label-secondary, #6b7280); cursor: pointer; white-space: nowrap; }",
+      ".qqb-side-item:hover { color: var(--dsw-alias-label-primary, #1f2328); border-color: var(--dsw-alias-border-l3, #d9dde3); }",
+      ".qqb-side-item--active { color: var(--dsw-alias-label-primary, #1f2328); background: var(--dsw-alias-bg-layer-3, #eceff3); border-color: transparent; font-weight: 500; }",
+      ".qqb-side-item-label { min-width: 0; }",
+      ".qqb-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }",
+      // 页头面包屑：路径小字 + 一句话说明
+      ".qqb-page-head { display: flex; flex-direction: column; gap: 2px; padding: 0 2px; }",
+      ".qqb-page-path { display: flex; align-items: baseline; gap: 6px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      ".qqb-page-path-sep { opacity: 0.6; }",
+      ".qqb-page-path-current { color: var(--dsw-alias-label-primary, #1f2328); font-weight: 500; }",
+      ".qqb-page-desc { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      // 宽容器（≥ 900px）：升级为左栏 rail
+      "@container (min-width: 900px) { .qqb-workspace { display: grid; grid-template-columns: 184px minmax(0, 1fr); gap: 20px; align-items: start; } .qqb-side { display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 10px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-2, #f7f8fa); position: sticky; top: 8px; } .qqb-side-head { display: flex; align-items: baseline; gap: 8px; padding: 2px 2px 6px; } .qqb-side-desc { display: block; margin: 0 0 6px; padding: 0 2px; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-tertiary, #8b93a1); } .qqb-side-list { flex-direction: column; gap: 2px; } .qqb-side-item { width: 100%; justify-content: space-between; border: 0; border-radius: 6px; padding: 5px 8px; } .qqb-side-item--active { background: var(--dsw-alias-bg-layer-3, #eceff3); box-shadow: none; } .qqb-side-item-label { flex: 1; } }",
+      "@container (max-width: 780px) { .qqb-tab { padding: 6px 9px; } }",
+      ".qqb-body { display: flex; flex-direction: column; gap: 14px; }",
       ".qqb-page { display: flex; flex-direction: column; gap: 14px; }",
-      ".qqb-card { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.22)); background: var(--dsw-alias-bg-layer-1, rgba(128, 128, 128, 0.04)); }",
+      // 卡片：细边、无底色（市场里分区是平的，靠细线与标题分层）
+      ".qqb-card { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: transparent; }",
       ".qqb-card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }",
-      ".qqb-card-title { margin: 0; font-size: 14px; font-weight: 600; }",
-      ".qqb-card-hint { font-size: 12px; opacity: 0.6; }",
+      ".qqb-card-title { margin: 0; font-size: 13px; line-height: 20px; font-weight: 600; }",
+      ".qqb-card-hint { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
       ".qqb-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }",
-      ".qqb-field-label { font-size: 13px; font-weight: 500; }",
-      ".qqb-help { margin: 0; font-size: 12px; line-height: 1.5; opacity: 0.65; }",
+      ".qqb-field-label { font-size: 13px; line-height: 20px; font-weight: 500; }",
+      ".qqb-help { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
       ".qqb-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; }",
       ".qqb-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }",
-      ".qqb-input, .qqb-area, .qqb-select { box-sizing: border-box; width: 100%; padding: 7px 9px; border-radius: 8px; font: inherit; font-size: 13px; color: inherit; outline: none; border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35)); background: var(--dsw-alias-bg-input, rgba(128, 128, 128, 0.08)); }",
-      ".qqb-input:focus, .qqb-area:focus, .qqb-select:focus { border-color: var(--dsw-alias-brand, #4d6bfe); }",
+      // 输入：8px 圆角 + 细线 + 极浅底
+      ".qqb-input, .qqb-area, .qqb-select { box-sizing: border-box; width: 100%; padding: 6px 9px; border-radius: 8px; font: inherit; font-size: 13px; line-height: 20px; color: inherit; outline: none; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-2, #f7f8fa); }",
+      ".qqb-input:focus, .qqb-area:focus, .qqb-select:focus { border-color: var(--dsw-alias-brand-primary, #4f6ef7); }",
       ".qqb-input--num { width: 130px; }",
       ".qqb-area { min-height: 110px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.6; }",
       ".qqb-area--tall { min-height: 360px; }",
-      ".qqb-btn { font: inherit; font-size: 13px; padding: 6px 16px; border-radius: 8px; cursor: pointer; color: inherit; border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.4)); background: transparent; transition: background-color 0.15s ease, opacity 0.15s ease; }",
-      ".qqb-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12)); }",
+      ".qqb-select { width: 100%; max-width: 360px; }",
+      // 按钮：默认虚线框；primary = 反色实心（官方 primary 观感）
+      ".qqb-btn { font: inherit; font-size: 13px; line-height: 20px; padding: 4px 14px; border-radius: 8px; cursor: pointer; color: var(--dsw-alias-label-primary, #1f2328); border: 1px solid var(--dsw-alias-border-l3, #d9dde3); background: transparent; transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease; }",
+      ".qqb-btn:hover:not(:disabled) { background: var(--dsw-alias-bg-layer-2, #f3f4f6); }",
       ".qqb-btn:disabled { opacity: 0.45; cursor: default; }",
-      ".qqb-btn--primary { background: var(--dsw-alias-brand, #4d6bfe); border-color: transparent; color: #fff; font-weight: 500; }",
-      ".qqb-btn--primary:hover:not(:disabled) { background: var(--dsw-alias-brand-strong, #3b5cf0); }",
-      ".qqb-btn--danger { color: var(--dsw-alias-danger, #d1242f); border-color: rgba(209, 36, 47, 0.35); }",
-      ".qqb-btn--danger:hover:not(:disabled) { background: rgba(209, 36, 47, 0.1); }",
-      ".qqb-btn--sm { padding: 4px 10px; font-size: 12px; }",
-      ".qqb-switch { position: relative; flex: none; width: 38px; height: 21px; padding: 0; border: none; border-radius: 999px; cursor: pointer; background: rgba(128, 128, 128, 0.35); transition: background-color 0.15s ease; }",
-      ".qqb-switch[aria-checked='true'] { background: var(--dsw-alias-brand, #4d6bfe); }",
-      ".qqb-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px; border-radius: 50%; background: #fff; transition: transform 0.15s ease; }",
-      ".qqb-switch[aria-checked='true']::after { transform: translateX(17px); }",
+      ".qqb-btn--primary { background: var(--dsw-alias-label-primary, #1f2328); border-color: transparent; color: var(--dsw-alias-bg-layer-1, #fff); font-weight: 500; }",
+      ".qqb-btn--primary:hover:not(:disabled) { opacity: 0.88; background: var(--dsw-alias-label-primary, #1f2328); }",
+      ".qqb-btn--danger { color: var(--dsw-alias-state-error-primary, #d1242f); border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d1242f) 40%, transparent); }",
+      ".qqb-btn--danger:hover:not(:disabled) { background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d1242f) 8%, transparent); }",
+      ".qqb-btn--sm { padding: 2px 10px; font-size: 12px; line-height: 18px; }",
+      // 开关：关闭=灰轨；开启=主色轨（官方 switch 观感）
+      ".qqb-switch { position: relative; flex: none; width: 36px; height: 20px; padding: 0; border: none; border-radius: 999px; cursor: pointer; background: var(--dsw-alias-border-l3, #d9dde3); transition: background-color 0.15s ease; }",
+      ".qqb-switch[aria-checked='true'] { background: var(--dsw-alias-brand-primary, #4f6ef7); }",
+      ".qqb-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--dsw-alias-bg-layer-1, #fff); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); transition: transform 0.15s ease; }",
+      ".qqb-switch[aria-checked='true']::after { transform: translateX(16px); }",
       ".qqb-switch:disabled { opacity: 0.45; cursor: default; }",
-      ".qqb-seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35)); border-radius: 999px; overflow: hidden; }",
-      ".qqb-seg-btn { font: inherit; font-size: 12px; padding: 5px 14px; border: none; background: transparent; color: inherit; cursor: pointer; opacity: 0.75; }",
-      ".qqb-seg-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12)); opacity: 1; }",
-      ".qqb-seg-btn--active { background: var(--dsw-alias-brand, #4d6bfe); color: #fff; opacity: 1; }",
+      // 分段控件：胶囊内嵌（选中用浅底，不填主色）
+      ".qqb-seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: 999px; overflow: hidden; background: var(--dsw-alias-bg-layer-2, #f7f8fa); }",
+      ".qqb-seg-btn { font: inherit; font-size: 12px; line-height: 18px; padding: 3px 13px; border: none; background: transparent; color: var(--dsw-alias-label-secondary, #6b7280); cursor: pointer; }",
+      ".qqb-seg-btn:hover { color: var(--dsw-alias-label-primary, #1f2328); }",
+      ".qqb-seg-btn--active { background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #1f2328); font-weight: 500; box-shadow: 0 0 0 1px var(--dsw-alias-border-l2, #e5e7eb), 0 1px 2px rgba(0, 0, 0, 0.06); }",
       ".qqb-grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }",
+      // 统计：数字大、说明小，无底色
       ".qqb-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 10px; }",
-      ".qqb-stat { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.22)); }",
-      ".qqb-stat-num { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }",
-      ".qqb-stat-label { font-size: 12px; opacity: 0.65; }",
-      ".qqb-kv { display: flex; flex-direction: column; gap: 4px; min-width: 0; }",
+      ".qqb-stat { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); }",
+      ".qqb-stat-num { font-size: 18px; line-height: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }",
+      ".qqb-stat-label { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      // 键值行：标签固定宽度、值可折行
+      ".qqb-kv { display: flex; flex-direction: column; gap: 5px; min-width: 0; }",
       ".qqb-kv-row { display: flex; gap: 12px; align-items: baseline; font-size: 12.5px; min-width: 0; }",
-      ".qqb-kv-label { flex: none; width: 92px; opacity: 0.6; }",
+      ".qqb-kv-label { flex: none; width: 96px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
       ".qqb-kv-value { min-width: 0; word-break: break-all; }",
-      ".qqb-kv-value--err { color: var(--dsw-alias-danger, #d1242f); }",
+      ".qqb-kv-value--err { color: var(--dsw-alias-state-error-primary, #d1242f); }",
       ".qqb-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }",
-      ".qqb-summary { margin: 0; padding: 10px 12px; border-radius: 10px; font-size: 13px; background: rgba(77, 107, 254, 0.08); border: 1px solid rgba(77, 107, 254, 0.22); }",
+      ".qqb-summary { margin: 0; padding: 9px 12px; border-radius: 8px; font-size: 12.5px; color: var(--dsw-alias-label-secondary, #6b7280); border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-2, #f7f8fa); }",
+      // 列表：靠细线分隔
       ".qqb-list { display: flex; flex-direction: column; }",
-      ".qqb-list-item { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 7px 0; border-bottom: 0.5px dashed var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.28)); }",
+      ".qqb-list-item { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--dsw-alias-border-l2, #e5e7eb); }",
       ".qqb-list-item:last-child { border-bottom: none; }",
       ".qqb-list-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }",
-      ".qqb-list-meta { font-size: 12px; opacity: 0.6; }",
-      ".qqb-file { font: inherit; font-size: 13px; padding: 3px 0; border: none; background: transparent; color: inherit; cursor: pointer; text-align: left; opacity: 0.85; }",
-      ".qqb-file:hover { text-decoration: underline; opacity: 1; }",
-      ".qqb-file--active { color: var(--dsw-alias-brand, #4d6bfe); font-weight: 600; opacity: 1; }",
-      ".qqb-pre { margin: 0; padding: 10px 12px; border-radius: 8px; max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; background: rgba(128, 128, 128, 0.08); }",
+      ".qqb-list-meta { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      ".qqb-file { font: inherit; font-size: 13px; padding: 3px 0; border: none; background: transparent; color: inherit; cursor: pointer; text-align: left; }",
+      ".qqb-file:hover { text-decoration: underline; }",
+      ".qqb-file--active { color: var(--dsw-alias-brand-primary, #4f6ef7); font-weight: 500; }",
+      ".qqb-pre { margin: 0; padding: 10px 12px; border-radius: 8px; max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; color: var(--dsw-alias-label-secondary, #6b7280); background: var(--dsw-alias-bg-layer-2, #f7f8fa); border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); }",
       ".qqb-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }",
       ".qqb-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-top: 4px; }",
       ".qqb-footer-note { display: flex; flex-direction: column; gap: 2px; min-height: 18px; }",
-      ".qqb-note { margin: 0; font-size: 12px; opacity: 0.8; }",
-      ".qqb-note--ok { color: var(--dsw-alias-success, #1a7f37); opacity: 1; }",
-      ".qqb-note--err { color: var(--dsw-alias-danger, #d1242f); opacity: 1; }",
-      ".qqb-dirty { color: var(--dsw-alias-warning, #9a6700); opacity: 1; }",
-      ".qqb-loading, .qqb-empty { margin: 0; padding: 12px 0; font-size: 12.5px; opacity: 0.65; }",
+      ".qqb-note { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary, #6b7280); }",
+      ".qqb-note--ok { color: var(--dsw-alias-state-success-primary, #1a7f37); }",
+      ".qqb-note--err { color: var(--dsw-alias-state-error-primary, #d1242f); }",
+      ".qqb-note--warn { color: var(--dsw-alias-state-warn-primary, #9a6700); }",
+      ".qqb-dirty { color: var(--dsw-alias-state-warn-primary, #9a6700); }",
+      ".qqb-loading, .qqb-empty { margin: 0; padding: 12px 0; font-size: 12.5px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
       ".qqb-error-block { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }",
-      ".qqb-tag { display: inline-flex; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; background: rgba(128, 128, 128, 0.14); }",
+      // 标签：官方 tag 形态（4px 圆角、细线、11px）
+      ".qqb-tag { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-secondary, #6b7280); border: 1px solid var(--dsw-alias-border-l3, #d9dde3); }",
+      // 扫码绑定
       ".qqb-bind { display: flex; flex-direction: column; gap: 10px; }",
-      ".qqb-qr { display: block; width: 220px; max-width: 100%; border-radius: 10px; background: #fff; padding: 10px; box-sizing: border-box; }",
-      ".qqb-note--warn { color: var(--dsw-alias-warning, #9a6700); opacity: 1; }",
-      ".qqb-select { width: 100%; max-width: 360px; }",
+      ".qqb-qr { display: block; width: 220px; max-width: 100%; border-radius: 8px; background: #fff; padding: 10px; box-sizing: border-box; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); }",
+      // 表情库
       ".qqb-sticker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }",
-      ".qqb-sticker-card { font: inherit; font-size: 13px; color: inherit; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.25)); background: transparent; }",
-      ".qqb-sticker-card:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, 0.12)); }",
-      ".qqb-sticker-card--active { border-color: var(--dsw-alias-brand, #4d6bfe); }",
-      ".qqb-sticker-thumb { display: block; width: 100%; height: 110px; object-fit: contain; border-radius: 8px; background: rgba(128, 128, 128, 0.1); }",
-      ".qqb-sticker-thumb--empty { display: flex; align-items: center; justify-content: center; font-size: 28px; opacity: 0.55; }",
+      ".qqb-sticker-card { font: inherit; font-size: 13px; color: inherit; text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: transparent; }",
+      ".qqb-sticker-card:hover { border-color: var(--dsw-alias-border-l3, #d9dde3); background: var(--dsw-alias-bg-layer-2, #f7f8fa); }",
+      ".qqb-sticker-card--active { border-color: var(--dsw-alias-brand-primary, #4f6ef7); }",
+      ".qqb-sticker-thumb { display: block; width: 100%; height: 110px; object-fit: contain; border-radius: 6px; background: var(--dsw-alias-bg-layer-2, #f3f4f6); }",
+      ".qqb-sticker-thumb--empty { display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
       ".qqb-sticker-name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; word-break: break-all; }",
-      ".qqb-sticker-source { font-size: 11px; opacity: 0.6; }",
-      "@media (max-width: 640px) { .qqb-tabs { gap: 4px; } .qqb-tab { padding: 4px 10px; font-size: 12px; } .qqb-grid-2 { grid-template-columns: 1fr; } .qqb-select { max-width: none; } }",
-      "@media (prefers-color-scheme: dark) { .qqb-root { color: #e6e6e6; } .qqb-card { background: rgba(255, 255, 255, 0.03); } .qqb-pre { background: rgba(255, 255, 255, 0.06); } .qqb-input, .qqb-area, .qqb-select { background: rgba(255, 255, 255, 0.06); } }",
+      ".qqb-sticker-source { font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      // 提示词段位 chips + 段落说明
+      ".qqb-prompt-note { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-2, #f7f8fa); }",
+      ".qqb-prompt-note .qqb-help { margin: 0; }",
+      ".qqb-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }",
+      ".qqb-chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 1px 8px; border-radius: 999px; font-size: 11px; line-height: 18px; color: var(--dsw-alias-label-secondary, #6b7280); border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-1, #fff); }",
+      ".qqb-chip--off { color: var(--dsw-alias-label-tertiary, #8b93a1); background: transparent; }",
+      ".qqb-chip-label { font-weight: 500; }",
+      ".qqb-chip-meta { color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      ".qqb-prompt-block { display: flex; flex-direction: column; gap: 12px; }",
+      // 提示词顺序表
+      ".qqb-order { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }",
+      ".qqb-order-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 2px; border-bottom: 1px solid var(--dsw-alias-border-l2, #e5e7eb); }",
+      ".qqb-order-item:last-child { border-bottom: none; }",
+      ".qqb-order-item--off { opacity: 0.6; }",
+      ".qqb-order-pos { font-size: 12px; color: var(--dsw-alias-label-tertiary, #8b93a1); font-variant-numeric: tabular-nums; text-align: right; }",
+      ".qqb-order-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }",
+      ".qqb-order-name { font-weight: 500; }",
+      ".qqb-order-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 11px; line-height: 16px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      ".qqb-order-note { color: var(--dsw-alias-label-tertiary, #8b93a1); }",
+      ".qqb-order-pri { font-variant-numeric: tabular-nums; }",
+      ".qqb-order-skip { padding: 0 6px; border-radius: 4px; border: 1px solid var(--dsw-alias-border-l3, #d9dde3); }",
+      ".qqb-order-auto { font-size: 11px; color: var(--dsw-alias-label-tertiary, #8b93a1); white-space: nowrap; justify-self: end; }",
+      ".qqb-order-item .qqb-btn { flex: none; }",
+      // 能力行：开关 + 删除按钮同一行
+      ".qqb-cap-row { flex-direction: row; align-items: flex-start; gap: 10px; }",
+      ".qqb-cap-row > .qqb-field { flex: 1; min-width: 0; }",
+      ".qqb-cap-row > .qqb-btn { flex: none; opacity: 0.75; }",
+      ".qqb-cap-row > .qqb-btn:hover:not(:disabled) { opacity: 1; }",
+      "@media (max-width: 640px) { .qqb-grid-2 { grid-template-columns: 1fr; } .qqb-select { max-width: none; } }",
     ].join("\n");
 
     function ensureStyles() {
@@ -401,7 +491,7 @@ window.__ModuleLoader__.load({
       return h(
         "div",
         { className: "qqb-error-block" },
-        h("p", { className: "qqb-note qqb-note--err" }, "⚠️ " + props.text),
+        h("p", { className: "qqb-note qqb-note--err" }, props.text),
         props.onRetry
           ? h(
               "button",
@@ -421,9 +511,9 @@ window.__ModuleLoader__.load({
     function StatusLine(props) {
       const status = props.status;
       if (status && status.state === "saving") return h("p", { className: "qqb-note" }, "正在保存…");
-      if (status && status.state === "error") return h("p", { className: "qqb-note qqb-note--err" }, "⚠️ " + status.message);
+      if (status && status.state === "error") return h("p", { className: "qqb-note qqb-note--err" }, status.message);
       if (props.dirty) return h("p", { className: "qqb-note qqb-dirty" }, props.dirtyText || "有未保存的修改");
-      if (status && status.state === "saved") return h("p", { className: "qqb-note qqb-note--ok" }, "✓ " + status.message);
+      if (status && status.state === "saved") return h("p", { className: "qqb-note qqb-note--ok" }, status.message);
       return null;
     }
 
@@ -927,18 +1017,6 @@ window.__ModuleLoader__.load({
       const pending = Array.isArray(bot.pending) ? bot.pending : [];
       const effectivePending = Array.isArray(effective.pending) ? effective.pending : [];
 
-      function patchReply(partial) {
-        void run(async function () {
-          await apiPost(API + "/settings", { patch: { reply: partial } });
-        }, "设置已保存");
-      }
-
-      function patchMemory(partial) {
-        void run(async function () {
-          await apiPost(API + "/settings", { patch: { memory: partial } });
-        }, "设置已保存");
-      }
-
       function doAction(action, confirmText) {
         if (confirmText && typeof window !== "undefined" && !window.confirm(confirmText)) return;
         void run(async function () {
@@ -1024,43 +1102,6 @@ window.__ModuleLoader__.load({
                 }),
               )
             : null,
-        ),
-        h(
-          Card,
-          { title: "快速开关", hint: "修改立即保存" },
-          h(Switch, {
-            label: "自动回复总开关",
-            help: "关闭后不再自动回复任何消息（/命令仍可用）",
-            checked: reply.enabled !== false,
-            onChange: function (value) {
-              patchReply({ enabled: value });
-            },
-          }),
-          h(Switch, {
-            label: "群聊自动回复",
-            help: "关闭后群聊只响应 @ / 回复 / 关键词等强制触发",
-            checked: reply.groupEnabled !== false,
-            onChange: function (value) {
-              patchReply({ groupEnabled: value });
-            },
-          }),
-          h(Switch, {
-            label: "私聊自动回复",
-            help: "关闭后私聊消息不再触发回复",
-            checked: reply.c2cEnabled !== false,
-            onChange: function (value) {
-              patchReply({ c2cEnabled: value });
-            },
-          }),
-          h(Switch, {
-            label: "长期记忆",
-            help: "关闭后不再注入 / 收集长期记忆",
-            checked: memorySettings.enabled !== false,
-            onChange: function (value) {
-              patchMemory({ enabled: value });
-            },
-          }),
-          h(StatusLine, { status: status, dirty: false }),
         ),
         h(
           Card,
@@ -1435,6 +1476,9 @@ window.__ModuleLoader__.load({
       const settings = snapshot && snapshot.settings ? snapshot.settings : null;
       const agentSettings = settings ? settings.agent || {} : {};
       const featuresSettings = settings ? settings.features || {} : {};
+      const toolsSettings = settings ? settings.tools || {} : {};
+      const capSettings = toolsSettings.capabilities && typeof toolsSettings.capabilities === "object" ? toolsSettings.capabilities : {};
+      const skillsSettings = toolsSettings.skills && typeof toolsSettings.skills === "object" ? toolsSettings.skills : {};
       const mapped = {
         preset: typeof agentSettings.preset === "string" ? agentSettings.preset : "",
         features: {
@@ -1443,15 +1487,41 @@ window.__ModuleLoader__.load({
           stickers: featuresSettings.stickers !== false,
           vision: featuresSettings.vision !== false,
           memory: featuresSettings.memory !== false,
+          // 新能力存 tools.capabilities（读不到时按 catalog 默认：关）
+          skills: capSettings.skills === true,
+          imagegen: capSettings.imagegen === true,
+          shell: capSettings.shell === true,
         },
       };
       const [draft, setDraft] = useDraft(mapped);
-      // 额外放行工具（skill / mcp_* / 第三方插件工具）
-      const toolsSettings = settings ? settings.tools || {} : {};
+      // 技能策略（白名单）
+      const mappedSkills = {
+        mode: skillsSettings.mode === "all" ? "all" : "allow",
+        allowedText: Array.isArray(skillsSettings.allowed) ? skillsSettings.allowed.join("\n") : "",
+      };
+      const [skillsDraft, setSkillsDraft] = useDraft(mappedSkills);
+      const [skillsStatus, runSkills] = useSaver(props.reload);
+      // 额外放行工具（mcp_* / 第三方插件工具）
       const mappedTools = {
         extraAllowedText: Array.isArray(toolsSettings.extraAllowed) ? toolsSettings.extraAllowed.join("\n") : "",
       };
       const [toolsDraft, setToolsDraft] = useDraft(mappedTools);
+      // 实际生效的能力边界（来自 /api/tools，只读展示）
+      const [toolsInfo, setToolsInfo] = react.useState(null);
+      const [toolsInfoError, setToolsInfoError] = react.useState("");
+      const loadToolsInfo = react.useCallback(async function () {
+        try {
+          const data = await apiGet(API + "/tools");
+          setToolsInfo(data && data.ok !== false ? data : null);
+          setToolsInfoError(data && data.ok === false ? String(data.error || "读取失败") : "");
+        } catch (error) {
+          setToolsInfo(null);
+          setToolsInfoError(msgOf(error));
+        }
+      }, []);
+      react.useEffect(function () {
+        void loadToolsInfo();
+      }, [loadToolsInfo]);
       const [toolsStatus, runTools] = useSaver(props.reload);
       const [presetsData, setPresetsData] = react.useState(null);
       const [presetsLoading, setPresetsLoading] = react.useState(true);
@@ -1479,6 +1549,7 @@ window.__ModuleLoader__.load({
 
       const agentInfo = snapshot.agent || {};
       const dirty = !sameJSON(draft, mapped);
+      const skillsDirty = !sameJSON(skillsDraft, mappedSkills);
       const toolsDirty = !sameJSON(toolsDraft, mappedTools);
       const selectedPreset = typeof draft.preset === "string" ? draft.preset : "";
       const hostPresetMode = selectedPreset !== "" && selectedPreset !== "qqbot-buddy";
@@ -1521,14 +1592,69 @@ window.__ModuleLoader__.load({
           await apiPost(API + "/settings", {
             patch: { tools: { extraAllowed: parseLineList(toolsDraft.extraAllowedText) } },
           });
+          await loadToolsInfo();
         }, "额外放行工具已保存（下一条消息生效，建议点「应用到当前会话」）");
+      }
+
+      /** 把被屏蔽的工具加入额外放行（一键允许新插件工具）。 */
+      function allowTools(names) {
+        const list = (Array.isArray(names) ? names : []).filter(function (name) {
+          return typeof name === "string" && name.trim() !== "";
+        });
+        if (list.length === 0) return;
+        setUnclaimedBusy(list.join(","));
+        void runTools(async function () {
+          const current = parseLineList(toolsDraft.extraAllowedText);
+          const merged = current.slice();
+          for (const name of list) {
+            if (merged.indexOf(name) === -1) merged.push(name);
+          }
+          await apiPost(API + "/settings", { patch: { tools: { extraAllowed: merged } } });
+          setToolsDraft({ extraAllowedText: merged.join("\n") });
+          await loadToolsInfo();
+          if (typeof props.onNotify === "function") {
+            props.onNotify("已放行 " + list.length + " 个工具；点下方「应用到当前会话」让它立刻生效");
+          }
+        }, "已放行 " + list.length + " 个工具（下一条消息生效，建议点「应用到当前会话」）");
+        setUnclaimedBusy("");
+      }
+
+      function saveSkillsPolicy() {
+        void runSkills(async function () {
+          await apiPost(API + "/settings", {
+            patch: {
+              tools: {
+                skills: {
+                  mode: skillsDraft.mode,
+                  allowed: parseLineList(skillsDraft.allowedText),
+                },
+              },
+            },
+          });
+          await loadToolsInfo();
+        }, "技能策略已保存（下一条消息生效，建议点「应用到当前会话」）");
       }
 
       function saveAgent() {
         void runSave(async function () {
+          const features = clone(draft.features);
+          // 新能力存 tools.capabilities，其余仍存 features（旧键）
+          const capabilities = {
+            skills: features.skills === true,
+            imagegen: features.imagegen === true,
+            shell: features.shell === true,
+          };
+          delete features.skills;
+          delete features.imagegen;
+          delete features.shell;
           await apiPost(API + "/settings", {
-            patch: { agent: { preset: draft.preset }, features: clone(draft.features) },
+            patch: {
+              agent: { preset: draft.preset },
+              features: features,
+              tools: { capabilities: capabilities },
+            },
           });
+          await loadToolsInfo();
         }, "Agent 设置已保存（对之后新建/恢复的会话生效）");
       }
 
@@ -1558,25 +1684,407 @@ window.__ModuleLoader__.load({
             value: draft.preset,
             options: presetOptions,
             disabled: presetsLoading,
-            help: "首项「内置组合（推荐）」= 插件自带的 qqbot-buddy 组合；选择宿主 preset 后工作区/联网由该 preset 决定。",
+            help: "首项「内置组合（推荐）」= 插件自带的 qqbot-buddy 组合；选择宿主 preset 也不会自动放宽工具，仍受能力边界约束。",
             onChange: function (value) {
               patchPreset(value);
             },
           });
 
-      const featureSwitches = FEATURE_ITEMS.map(function (item) {
-        const disabled = hostPresetMode && (item.key === "workspace" || item.key === "web");
-        return h(Switch, {
-          key: item.key,
-          label: item.label,
-          help: disabled ? item.help + "（由所选宿主预设决定，保存后不生效）" : item.help,
-          checked: draft.features[item.key] !== false,
-          disabled: disabled,
-          onChange: function (value) {
-            patchFeature(item.key, value);
-          },
-        });
-      });
+      // ── 能力列表：以 /api/tools 为准（内置 + 用户新增；已删除的单独列出可恢复）──
+      const capabilityRows = toolsInfo && Array.isArray(toolsInfo.capabilities) ? toolsInfo.capabilities : [];
+      const removedRows = toolsInfo && Array.isArray(toolsInfo.removed) ? toolsInfo.removed : [];
+      const [capBusy, setCapBusy] = react.useState("");
+      const [newCapOpen, setNewCapOpen] = react.useState(false);
+      const [newCapName, setNewCapName] = react.useState("");
+      const [newCapLabel, setNewCapLabel] = react.useState("");
+      const [newCapTools, setNewCapTools] = react.useState({});
+      const [discovering, setDiscovering] = react.useState(false);
+      const [discoveredTools, setDiscoveredTools] = react.useState([]);
+
+      /** 写能力条目（patch settings），返回 promise。 */
+      async function patchCapabilities(entriesPatch, removedPatch) {
+        const body = { tools: {} };
+        if (entriesPatch !== undefined) body.tools.capabilityEntries = entriesPatch;
+        if (removedPatch !== undefined) body.tools.removedCapabilities = removedPatch;
+        await apiPost(API + "/settings", { patch: body });
+        await loadToolsInfo();
+        if (typeof props.reload === "function") await props.reload();
+      }
+
+      /** 现有条目（用于增删时不覆盖别人）。 */
+      function currentEntries() {
+        const t = settings && settings.tools ? settings.tools : {};
+        return t.capabilityEntries && typeof t.capabilityEntries === "object" ? t.capabilityEntries : {};
+      }
+      function currentRemoved() {
+        const t = settings && settings.tools ? settings.tools : {};
+        return Array.isArray(t.removedCapabilities) ? t.removedCapabilities.slice() : [];
+      }
+
+      function toggleCapability(row, value) {
+        setCapBusy(row.id);
+        const entries = Object.assign({}, currentEntries());
+        const prev = entries[row.id] && typeof entries[row.id] === "object" ? entries[row.id] : {};
+        entries[row.id] = Object.assign({}, prev, { enabled: value });
+        void runTools(async function () {
+          await patchCapabilities(entries);
+        }, "能力已" + (value ? "启用" : "停用") + "：" + row.label);
+        setCapBusy("");
+      }
+
+      /** 暂时删除：内置能力移入 removedCapabilities（可恢复），自定义能力直接删条目。 */
+      function removeCapability(row) {
+        if (typeof window !== "undefined" && !window.confirm("暂时删除能力「" + row.label + "」？内置能力可从下方恢复。")) return;
+        setCapBusy(row.id);
+        const entries = Object.assign({}, currentEntries());
+        const removed = currentRemoved();
+        if (row.origin === "custom") {
+          delete entries[row.id];
+          void runTools(async function () {
+            await patchCapabilities(entries);
+          }, "已删除自定义能力：" + row.label);
+        } else {
+          if (removed.indexOf(row.id) === -1) removed.push(row.id);
+          void runTools(async function () {
+            await patchCapabilities(entries, removed);
+          }, "已暂时删除能力：" + row.label + "（可在下方恢复）");
+        }
+        setCapBusy("");
+      }
+
+      function restoreCapability(id) {
+        setCapBusy(id);
+        const removed = currentRemoved().filter(function (item) { return item !== id; });
+        void runTools(async function () {
+          await patchCapabilities(undefined, removed);
+        }, "已恢复能力：" + id);
+        setCapBusy("");
+      }
+
+      /** 扫描发现：读 /api/tools 的 candidates（真实装配里存在的全部工具），列出未归类项。 */
+      function discoverTools() {
+        setDiscovering(true);
+        void (async function () {
+          try {
+            const data = await apiGet(API + "/tools");
+            const list = data && Array.isArray(data.discovered) ? data.discovered : [];
+            setDiscoveredTools(list);
+            const pick = {};
+            for (const name of list) pick[name] = true;
+            setNewCapTools(pick);
+            setNewCapOpen(true);
+          } finally {
+            setDiscovering(false);
+          }
+        })();
+      }
+
+      function createCapability() {
+        const id = String(newCapName || "").trim();
+        const label = String(newCapLabel || "").trim() || id;
+        if (!/^[A-Za-z0-9_-]{1,40}$/.test(id)) {
+          if (typeof window !== "undefined") window.alert("能力 id 只能包含字母/数字/下划线/连字符");
+          return;
+        }
+        const tools = Object.keys(newCapTools).filter(function (name) { return newCapTools[name] === true; });
+        if (tools.length === 0) {
+          if (typeof window !== "undefined") window.alert("至少选择一个工具");
+          return;
+        }
+        setCapBusy(id);
+        const entries = Object.assign({}, currentEntries());
+        entries[id] = { label: label, tools: tools, enabled: true };
+        void runTools(async function () {
+          await patchCapabilities(entries);
+          setNewCapOpen(false);
+          setNewCapName("");
+          setNewCapLabel("");
+          setNewCapTools({});
+        }, "已新增能力：" + label + "（" + tools.length + " 个工具）");
+        setCapBusy("");
+      }
+
+      const featureSwitches = capabilityRows.length > 0
+        ? capabilityRows.map(function (row) {
+            return h(
+              "div",
+              { key: row.id, className: "qqb-field qqb-cap-row" },
+              h(Switch, {
+                label: row.label + (row.origin === "custom" ? "（自定义）" : ""),
+                help: "工具：" + (Array.isArray(row.tools) && row.tools.length > 0 ? row.tools.join("、") : "—"),
+                checked: row.enabled === true,
+                disabled: capBusy === row.id,
+                onChange: function (value) {
+                  toggleCapability(row, value);
+                },
+              }),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "qqb-btn qqb-btn--sm",
+                  disabled: capBusy === row.id,
+                  onClick: function () {
+                    removeCapability(row);
+                  },
+                },
+                "暂时删除",
+              ),
+            );
+          })
+        : FEATURE_ITEMS.map(function (item) {
+            // 兜底：读不到 /api/tools 时退回静态开关
+            return h(Switch, {
+              key: item.key,
+              label: item.label,
+              help: item.help,
+              checked: item.store === "capabilities"
+                ? draft.features[item.key] === true
+                : draft.features[item.key] !== false,
+              onChange: function (value) {
+                patchFeature(item.key, value);
+              },
+            });
+          });
+
+      const capabilityManageCard = h(
+        Card,
+        { title: "管理能力（增删 / 扫描发现）", hint: "能力不再写死：可新增、可暂时删除、可扫描发现" },
+        h(
+          "div",
+          { className: "qqb-toolbar" },
+          h(
+            "button",
+            {
+              type: "button",
+              className: "qqb-btn",
+              disabled: discovering,
+              onClick: discoverTools,
+            },
+            discovering ? "扫描中…" : "扫描发现可用工具",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              className: "qqb-btn",
+              onClick: function () {
+                setNewCapOpen(!newCapOpen);
+              },
+            },
+            newCapOpen ? "收起新建" : "手动新建能力",
+          ),
+        ),
+        discoveredTools.length > 0
+          ? h("p", { className: "qqb-help" }, "发现 " + discoveredTools.length + " 个未归类工具，可在下方勾选归类为新能力。")
+          : null,
+        newCapOpen
+          ? h(
+              "div",
+              null,
+              h(TextField, {
+                label: "能力 id（英文/数字/下划线）",
+                value: newCapName,
+                placeholder: "my_tools",
+                onChange: setNewCapName,
+              }),
+              h(TextField, {
+                label: "显示名称",
+                value: newCapLabel,
+                placeholder: "我的工具",
+                onChange: setNewCapLabel,
+              }),
+              h(
+                "p",
+                { className: "qqb-help" },
+                discoveredTools.length > 0
+                  ? "勾选要归入该能力的工具："
+                  : "点「扫描发现可用工具」可列出当前装配里存在、但未归类的能力工具。",
+              ),
+              discoveredTools.map(function (name) {
+                return h(Switch, {
+                  key: name,
+                  label: name,
+                  checked: newCapTools[name] === true,
+                  onChange: function (value) {
+                    setNewCapTools(function (prev) {
+                      const next = Object.assign({}, prev);
+                      next[name] = value;
+                      return next;
+                    });
+                  },
+                });
+              }),
+              h(
+                "div",
+                { className: "qqb-toolbar" },
+                h(
+                  "button",
+                  { type: "button", className: "qqb-btn qqb-btn--primary", disabled: capBusy !== "", onClick: createCapability },
+                  "创建能力",
+                ),
+              ),
+            )
+          : null,
+        removedRows.length > 0
+          ? h(
+              "div",
+              null,
+              h("p", { className: "qqb-help" }, "已暂时删除的内置能力（点恢复）："),
+              h(
+                "div",
+                { className: "qqb-toolbar" },
+                removedRows.map(function (id) {
+                  return h(
+                    "button",
+                    {
+                      key: id,
+                      type: "button",
+                      className: "qqb-btn qqb-btn--sm",
+                      disabled: capBusy === id,
+                      onClick: function () {
+                        restoreCapability(id);
+                      },
+                    },
+                    "恢复 " + id,
+                  );
+                }),
+              ),
+            )
+          : null,
+      );
+
+      const allowList = toolsInfo && Array.isArray(toolsInfo.allow) ? toolsInfo.allow : null;
+      const toolCaps = toolsInfo && Array.isArray(toolsInfo.capabilities) ? toolsInfo.capabilities : [];
+      const skillsInfo = toolCaps.filter(function (item) { return item && item.id === "skills"; })[0] || null;
+      const visibleSkills = toolsInfo && Array.isArray(toolsInfo.skills) ? toolsInfo.skills : [];
+      const unknownTools = allowList
+        ? allowList.filter(function (name) {
+            return !toolCaps.some(function (cap) {
+              return Array.isArray(cap.tools) && cap.tools.indexOf(name) !== -1;
+            });
+          })
+        : [];
+      // 本次装配里"存在但被屏蔽"的工具：新插件注册的工具会出现在这里。
+      // 点"允许"= 写进 settings.tools.extraAllowed，不需要改插件代码。
+      const unclaimed = toolsInfo && Array.isArray(toolsInfo.unclaimed) ? toolsInfo.unclaimed : [];
+      const [unclaimedBusy, setUnclaimedBusy] = react.useState("");
+
+      const effectiveCard = h(
+        Card,
+        { title: "当前实际生效", hint: "来自插件能力目录（GET /api/tools），只读" },
+        toolsInfoError !== ""
+          ? h("p", { className: "qqb-note qqb-note--warn" }, "读取 /api/tools 失败：" + toolsInfoError)
+          : null,
+        allowList === null
+          ? h(LoadingBlock, { text: toolsInfoError !== "" ? "无法获取" : "正在读取…" })
+          : h(
+              "div",
+              null,
+              h(
+                "p",
+                { className: "qqb-help" },
+                "放行 " + allowList.length + " 个工具：" + (allowList.length > 0 ? allowList.join("、") : "（无）"),
+              ),
+              unknownTools.length > 0
+                ? h(
+                    "p",
+                    { className: "qqb-help" },
+                    "其中由「额外放行工具」显式加入：" + unknownTools.join("、"),
+                  )
+                : null,
+              skillsInfo && skillsInfo.enabled === true
+                ? h(
+                    "p",
+                    { className: "qqb-help" },
+                    "技能可见 " + visibleSkills.length + " 个：" +
+                      (visibleSkills.length > 0
+                        ? visibleSkills.map(function (item) { return item.name; }).join("、")
+                        : "（无）"),
+                  )
+                : null,
+              // 白名单写错的技能名会静默失效——必须显式提示
+              skillsInfo && Array.isArray(skillsInfo.missing) && skillsInfo.missing.length > 0
+                ? h(
+                    "p",
+                    { className: "qqb-note qqb-note--warn" },
+                    "白名单里这些技能名在本机找不到（写错或未安装）：" +
+                      skillsInfo.missing.join("、") + "。请检查拼写（如 bili-get 带连字符）。",
+                  )
+                : null,
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "qqb-btn qqb-btn--sm",
+                  onClick: function () {
+                    void loadToolsInfo();
+                  },
+                },
+                "刷新",
+              ),
+            ),
+      );
+
+      const unclaimedCard = h(
+        Card,
+        {
+          title: "新发现的工具（可一键放行）",
+          hint: "装了新插件不用改代码：它的工具会出现在这里，点「允许」即可",
+        },
+        unclaimed.length === 0
+          ? h(
+              "p",
+              { className: "qqb-help" },
+              "没有未归类的工具。装了新插件后，这里会列出它注册但被默认拦下的工具名。",
+            )
+          : h(
+              "div",
+              null,
+              h(
+                "p",
+                { className: "qqb-help" },
+                "下列工具当前存在，但不在任何已启用的能力里，因此被屏蔽：",
+              ),
+              h(
+                "div",
+                { className: "qqb-toolbar" },
+                unclaimed.map(function (name) {
+                  return h(
+                    "button",
+                    {
+                      key: name,
+                      type: "button",
+                      className: "qqb-btn qqb-btn--sm",
+                      disabled: unclaimedBusy !== "",
+                      title: "把这个工具加入额外放行",
+                      onClick: function () {
+                        allowTools([name]);
+                      },
+                    },
+                    "允许 " + name,
+                  );
+                }),
+              ),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "qqb-btn",
+                  disabled: unclaimedBusy !== "",
+                  onClick: function () {
+                    allowTools(unclaimed);
+                  },
+                },
+                "全部允许（" + unclaimed.length + "）",
+              ),
+              h(
+                "p",
+                { className: "qqb-help" },
+                "放行会写入「额外放行工具」，等价于在下面文本框里手写这些名字。",
+              ),
+            ),
+      );
 
       return h(
         "div",
@@ -1609,29 +2117,83 @@ window.__ModuleLoader__.load({
             ? h(
                 "p",
                 { className: "qqb-note qqb-note--warn" },
-                "已选择宿主预设：工作区 / 联网开关由该预设自带的工具决定（保存但不生效）；表情包 / 看图 / 记忆仍受开关控制。",
+                "已选择宿主预设：该预设自带的工具不会自动放行，仍受下方「能力边界」控制；需要额外工具请用底部「额外放行工具」显式列出。",
               )
             : null,
         ),
         h(
           Card,
-          { title: "功能开关", hint: "决定 bot 会话可用的工具范围" },
-          featureSwitches,
+          { title: "能力边界", hint: "默认拒绝：只有打开的能力所授权的工具才会给到模型" },
           h(
             "p",
             { className: "qqb-help" },
-            "工作区=fs/glob/grep；联网=web_search/web_fetch；表情包=qqbot_send_file；看图=qqbot_describe_image；记忆=memory_* 工具。内置组合下保存后对新会话生效。",
+            "每一项能力对应一组工具，未授权的一律屏蔽（加载了第三方插件也不会漏进来）。保存后对新会话生效。",
           ),
+          featureSwitches,
+          h(SaveBar, { dirty: dirty, status: saveStatus, onSave: saveAgent, note: "能力设置有未保存的修改", label: "保存能力设置" }),
         ),
+        capabilityManageCard,
         h(
           Card,
-          { title: "保存与应用", hint: "修改只影响新会话" },
+          { title: "技能策略（skills）", hint: "白名单只决定哪些技能可见；开关在上面的能力边界里" },
+          draft.features.skills === true
+            ? h(
+                "div",
+                null,
+                h(SelectField, {
+                  label: "可见范围",
+                  value: skillsDraft.mode,
+                  options: SKILL_MODE_OPTIONS,
+                  help: "「仅白名单」只暴露下面列出的技能；「全部可见」暴露本机全部技能。",
+                  onChange: function (value) {
+                    setSkillsDraft(function (prev) {
+                      return Object.assign({}, prev, { mode: value });
+                    });
+                  },
+                }),
+                skillsDraft.mode === "allow"
+                  ? h(AreaField, {
+                      label: "白名单（每行一个技能名）",
+                      rows: 4,
+                      value: skillsDraft.allowedText || "",
+                      placeholder: "bili-get",
+                      help: "技能名即 ~/.dsh/skills/<名字>/ 或 ~/.agents/skills/<名字>/。可在上面的「当前实际生效」里核对实际可见技能。",
+                      onChange: function (value) {
+                        setSkillsDraft({ allowedText: value, mode: skillsDraft.mode });
+                      },
+                    })
+                  : h(
+                      "p",
+                      { className: "qqb-help" },
+                      "全部可见：本机所有技能都会暴露给模型" +
+                        (visibleSkills.length > 0
+                          ? "（当前 " + visibleSkills.length + " 个）"
+                          : "") + "。",
+                    ),
+                h(SaveBar, {
+                  dirty: skillsDirty,
+                  status: skillsStatus,
+                  onSave: saveSkillsPolicy,
+                  note: "技能策略有未保存的修改",
+                  label: "保存技能策略",
+                }),
+              )
+            : h(
+                "p",
+                { className: "qqb-help" },
+                "技能能力当前关闭：模型看不到 skill 工具。打开上方「技能（skills）」后即可配置白名单。",
+              ),
+        ),
+        effectiveCard,
+        unclaimedCard,
+        h(
+          Card,
+          { title: "应用到当前会话", hint: "重置内存中的 bot 会话，让新能力边界立刻生效" },
           h(
             "p",
             { className: "qqb-help" },
-            "修改只影响之后新建/恢复的会话；点「应用到当前会话」会重置 bot 上下文（保留 sessions.json 映射），下一条消息使用新设置。",
+            "修改只影响之后新建/恢复的会话；点下面的按钮会重置 bot 上下文（保留 sessions.json 映射），下一条消息使用新设置。",
           ),
-          h(SaveBar, { dirty: dirty, status: saveStatus, onSave: saveAgent, note: "Agent 设置有未保存的修改", label: "保存 Agent 设置" }),
           h(
             "div",
             { className: "qqb-toolbar" },
@@ -1667,20 +2229,20 @@ window.__ModuleLoader__.load({
           Card,
           {
             title: "额外放行工具（高级）",
-            hint: "skill / MCP / 第三方插件工具；内置组合默认只放行本插件工具",
+            hint: "MCP / 第三方插件工具：能力清单没覆盖到的，在这里显式放行",
           },
           h(
             "p",
             { className: "qqb-help" },
-            "每行一个工具名。常用：skill（加载 ~/.dsh/skills 里的技能）、MCP 工具（名称以宿主注册为准，可在插件管理里查看）。"
-              + "内置组合下会把它们加入白名单；切到宿主预设时会把它们从屏蔽名单里移除。改完建议点上面的「应用到当前会话」。",
+            "每行一个工具名，例如 mcp__filesystem__read_file。技能请用上方「技能策略」，image-gen 请打开「图片生成」能力，一般不需要写在这里。"
+              + "保存后建议点「应用到当前会话」。",
           ),
           h(AreaField, {
             label: "允许的工具名",
             rows: 5,
             value: toolsDraft.extraAllowedText || "",
-            placeholder: "skill\nmcp__filesystem__read_file",
-            help: "留空 = 不额外放行（保持当前精简能力）。只写工具名，不要写参数。",
+            placeholder: "mcp__filesystem__read_file",
+            help: "留空 = 不额外放行（只保留能力边界里的工具）。只写工具名，不要写参数。",
             onChange: function (value) {
               setToolsDraft({ extraAllowedText: value });
             },
@@ -1691,6 +2253,233 @@ window.__ModuleLoader__.load({
             onSave: saveExtraTools,
             note: "额外放行工具有未保存的修改",
           }),
+        ),
+      );
+    }
+
+    /**
+     * 单个提示段的独立编辑页（如「安全红线」）。
+     * 数据来自 /api/prompt 的 defaults（内置默认）+ details（当前生效）；覆盖存 prompts.sections[id]。
+     */
+    function PromptSectionPage(props) {
+      const sectionId = props.sectionId;
+      const sectionLabel = props.sectionLabel || sectionId;
+      // inline = 嵌在别的页面里（不额外包一层 .qqb-page，避免双重间距）
+      const inline = props.inline === true;
+      const [info, setInfo] = react.useState(null);
+      const [text, setText] = react.useState("");
+      const [enabled, setEnabled] = react.useState(true);
+      const [custom, setCustom] = react.useState(false);
+      const [loading, setLoading] = react.useState(true);
+      const [status, runSave] = useSaver(props.reload);
+
+      const load = react.useCallback(async function () {
+        setLoading(true);
+        try {
+          const data = await apiGet(API + "/prompt?scope=group");
+          setInfo(data);
+          const detail = (Array.isArray(data.details) ? data.details : []).filter(function (item) {
+            return item.id === sectionId;
+          })[0];
+          // 已自定义 -> 显示自定义文本；否则显示当前生效内容（含内置默认）
+          setText(detail && typeof detail.text === "string" ? detail.text : "");
+          const stored = props.snapshot && props.snapshot.settings && props.snapshot.settings.prompts
+            && props.snapshot.settings.prompts.sections ? props.snapshot.settings.prompts.sections[sectionId] : null;
+          const hasCustom = !!(stored && typeof stored.text === "string" && stored.text !== "");
+          setCustom(hasCustom);
+          setEnabled(!(stored && stored.enabled === false));
+        } finally {
+          setLoading(false);
+        }
+      }, [sectionId]);
+      react.useEffect(function () {
+        void load();
+      }, [load]);
+
+      const [baseline, setBaseline] = react.useState(null);
+      react.useEffect(function () {
+        if (!loading && baseline === null) setBaseline({ text: text, enabled: enabled });
+      }, [loading, baseline, text, enabled]);
+      const dirty = !!baseline && (baseline.text !== text || baseline.enabled !== enabled);
+
+      function save() {
+        void runSave(async function () {
+          const current = props.snapshot && props.snapshot.settings && props.snapshot.settings.prompts
+            && props.snapshot.settings.prompts.sections ? props.snapshot.settings.prompts.sections : {};
+          const next = Object.assign({}, current);
+          next[sectionId] = { enabled: enabled, text: custom ? text : "" };
+          await apiPost(API + "/settings", {
+            patch: { prompts: { sections: next } },
+          });
+          setBaseline({ text: text, enabled: enabled });
+          await load();
+        }, sectionLabel + "已保存（下一条消息生效）");
+      }
+
+      if (loading) return h("div", { className: "qqb-page" }, h(LoadingBlock, { text: "正在读取…" }));
+
+      // 段的存储键（prompts.<key>）与段 id 不一定同名：表情包段 id 是 stickers，默认文本键是 stickerGuide
+      const PROMPT_DEFAULT_KEY = { stickers: "stickerGuide" };
+      const defaultsKey = PROMPT_DEFAULT_KEY[sectionId] || sectionId;
+      const defaultText =
+        info && info.defaults
+          ? (typeof info.defaults[defaultsKey] === "string" ? info.defaults[defaultsKey] : (typeof info.defaults[sectionId] === "string" ? info.defaults[sectionId] : ""))
+          : "";
+      const Wrapper = inline === true ? react.Fragment : "div";
+      return h(
+        Wrapper,
+        inline === true ? null : { className: "qqb-page" },
+        h(
+          Card,
+          {
+            title: sectionLabel,
+            hint: custom ? "已自定义（覆盖内置默认）" : "当前使用内置默认内容",
+          },
+          h(Switch, {
+            label: "启用该段",
+            help: "关掉后这段完全不注入提示词",
+            checked: enabled,
+            onChange: function (value) {
+              setEnabled(value);
+            },
+          }),
+          h(AreaField, {
+            label: custom ? "自定义内容" : "内容（内置默认，可直接修改）",
+            rows: 10,
+            value: text,
+            onChange: function (value) {
+              setText(value);
+              setCustom(true);
+            },
+          }),
+          h(
+            "div",
+            { className: "qqb-toolbar" },
+            custom
+              ? h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "qqb-btn qqb-btn--sm",
+                    onClick: function () {
+                      setText(defaultText);
+                      setCustom(false);
+                    },
+                  },
+                  "恢复内置默认",
+                )
+              : null,
+          ),
+          h(SaveBar, {
+            dirty: dirty,
+            status: status,
+            onSave: save,
+            note: sectionLabel + "有未保存的修改",
+            label: "保存" + sectionLabel,
+          }),
+        ),
+      );
+    }
+
+    /** 安全红线页（提示词 tab 的二级菜单）。 */
+    function SafetyPage(props) {
+      return h(PromptSectionPage, Object.assign({}, props, { sectionId: "safety", sectionLabel: "安全红线" }));
+    }
+
+    /** 工具约定页。 */
+    function PromptToolGuidePage(props) {
+      return h(PromptSectionPage, Object.assign({}, props, { sectionId: "toolGuide", sectionLabel: "工具约定" }));
+    }
+
+    /** 消息格式页。 */
+    function PromptSendGuidePage(props) {
+      return h(PromptSectionPage, Object.assign({}, props, { sectionId: "sendGuide", sectionLabel: "消息格式与长短" }));
+    }
+
+    /** 群聊节奏页。 */
+    function PromptRhythmGuidePage(props) {
+      return h(PromptSectionPage, Object.assign({}, props, { sectionId: "rhythmGuide", sectionLabel: "群聊节奏" }));
+    }
+
+    /** 口头禅页（二级菜单入口，复用 PhrasesPage 的容器）。 */
+    function PhrasesTabPage(props) {
+      return h("div", { className: "qqb-page" }, h(PhrasesPage, props));
+    }
+
+    /** 回复频率页（二级菜单）。 */
+    function FrequencyTabPage(props) {
+      return h("div", { className: "qqb-page" }, h(FrequencyPage, props));
+    }
+
+    /** 触发条件页（二级菜单）。 */
+    function TriggersTabPage(props) {
+      return h("div", { className: "qqb-page" }, h(TriggersPage, props));
+    }
+
+    /** 能力边界页（二级菜单）。 */
+    function CapabilitiesTabPage(props) {
+      return h("div", { className: "qqb-page" }, h(AgentPage, props));
+    }
+
+    /** 读取 /api/prompt 的小 hook（多个提示词页共用）。 */
+    function usePromptInfo() {
+      const [data, setData] = react.useState(null);
+      const [loading, setLoading] = react.useState(true);
+      const [error, setError] = react.useState("");
+      const load = react.useCallback(async function () {
+        setLoading(true);
+        try {
+          const res = await apiGet(API + "/prompt?scope=group");
+          setData(res);
+          setError("");
+        } catch (err) {
+          setData(null);
+          setError(msgOf(err));
+        } finally {
+          setLoading(false);
+        }
+      }, []);
+      react.useEffect(function () {
+        void load();
+      }, [load]);
+      return { data: data, loading: loading, error: error, reload: load };
+    }
+
+    /** 提示词 → 最终提示词：拼好的整体 prompt（只读）。 */
+    function PromptFinalPage() {
+      const info = usePromptInfo();
+      const [copied, setCopied] = react.useState(false);
+      if (info.loading) return h("div", { className: "qqb-page" }, h(LoadingBlock, { text: "正在拼接提示词…" }));
+      if (info.error !== "") return h("div", { className: "qqb-page" }, h(ErrorBlock, { text: "读取失败：" + info.error, onRetry: info.reload }));
+      const text = info.data && typeof info.data.text === "string" ? info.data.text : "";
+      const order = info.data && Array.isArray(info.data.order) ? info.data.order : [];
+      return h(
+        "div",
+        { className: "qqb-page" },
+        h(
+          Card,
+          { title: "最终提示词", hint: "下一条消息实际注入的完整内容（" + [...text].length + " 字 / " + order.length + " 段）" },
+          h(AreaField, { label: "拼接结果（只读）", rows: 20, value: text, onChange: function () {} }),
+          h(
+            "div",
+            { className: "qqb-toolbar" },
+            h("button", { type: "button", className: "qqb-btn qqb-btn--sm", onClick: function () { void info.reload(); } }, "刷新"),
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm",
+                onClick: async function () {
+                  try {
+                    await navigator.clipboard.writeText(text);
+                    setCopied(true);
+                    setTimeout(function () { setCopied(false); }, 1500);
+                  } catch (error) { /* 剪贴板不可用忽略 */ }
+                },
+              },
+              copied ? "已复制" : "复制全文",
+            ),
+          ),
         ),
       );
     }
@@ -1940,7 +2729,7 @@ window.__ModuleLoader__.load({
       const [failed, setFailed] = react.useState(false);
       const item = props.item || {};
       if (failed || !item.url) {
-        return h("div", { className: "qqb-sticker-thumb qqb-sticker-thumb--empty" }, "🖼");
+        return h("div", { className: "qqb-sticker-thumb qqb-sticker-thumb--empty" }, "无预览");
       }
       return h("img", {
         className: "qqb-sticker-thumb",
@@ -1962,6 +2751,7 @@ window.__ModuleLoader__.load({
         featuresStickers: featuresSettings.stickers !== false,
         collectEnabled: stickerSettings.collectEnabled !== false,
         dailyLimit: typeof stickerSettings.dailyLimit === "number" ? stickerSettings.dailyLimit : 10,
+        frequency: typeof stickerSettings.frequency === "string" ? stickerSettings.frequency : "normal",
       };
       const [draft, setDraft] = useDraft(mapped);
       const [data, setData] = react.useState(null);
@@ -2026,7 +2816,11 @@ window.__ModuleLoader__.load({
           await apiPost(API + "/settings", {
             patch: {
               features: { stickers: draft.featuresStickers },
-              stickers: { collectEnabled: draft.collectEnabled, dailyLimit: draft.dailyLimit },
+              stickers: {
+                collectEnabled: draft.collectEnabled,
+                dailyLimit: draft.dailyLimit,
+                frequency: draft.frequency,
+              },
             },
           });
         }, "表情包设置已保存");
@@ -2117,12 +2911,11 @@ window.__ModuleLoader__.load({
       const uploading = uploadStatus && uploadStatus.state === "saving";
       const editing = editStatus && editStatus.state === "saving";
 
-      return h(
-        "div",
-        { className: "qqb-page" },
-        h(
-          Card,
-          { title: "表情包设置", hint: "管理 bot 可发送的表情图片" },
+      // 拆成两块：part="settings" 只渲染开关，part="library" 只渲染库/编辑/上传；
+      // 中间插入「使用规则」提示段，让「设置 → 规则 → 库」的阅读顺序是顺的。
+      const settingsCard = h(
+        Card,
+        { title: "表情包设置", hint: "管理 bot 可发送的表情图片" },
           h(
             "div",
             { className: "qqb-kv" },
@@ -2159,6 +2952,18 @@ window.__ModuleLoader__.load({
               patchToggle({ dailyLimit: value });
             },
           }),
+          // 服务端还没重启（旧版 settings 无 frequency 字段）时不渲染，避免"改了却被归一化丢弃"
+          typeof stickerSettings.frequency === "string"
+            ? h(ChoiceGroup, {
+                label: "发送频率",
+                value: draft.frequency || "normal",
+                options: STICKER_FREQUENCY_OPTIONS,
+                onChange: function (value) {
+                  patchToggle({ frequency: value });
+                },
+                help: "只调【表情包】提示段里的节奏指引（不硬性拦截工具调用，避免攒一堆表情发不出去）。点了「保存设置」后下一轮生效。",
+              })
+            : null,
           h(SaveBar, {
             dirty: dirty,
             status: saveStatus,
@@ -2166,7 +2971,9 @@ window.__ModuleLoader__.load({
             note: "表情包设置有未保存的修改",
             label: "保存设置",
           }),
-        ),
+      );
+
+      const libraryCards = [
         h(
           Card,
           { title: "表情库", hint: loading ? "读取中…" : "点击卡片编辑" },
@@ -2286,7 +3093,7 @@ window.__ModuleLoader__.load({
             rows: 2,
             onChange: setUploadNote,
           }),
-          uploadError ? h("p", { className: "qqb-note qqb-note--err" }, "⚠️ " + uploadError) : null,
+          uploadError ? h("p", { className: "qqb-note qqb-note--err" }, uploadError) : null,
           h(
             "div",
             { className: "qqb-footer" },
@@ -2298,6 +3105,13 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
+      ];
+
+      return h(
+        "div",
+        { className: "qqb-page" },
+        props.part === "library" ? null : settingsCard,
+        props.part === "settings" ? null : libraryCards,
       );
     }
 
@@ -2314,30 +3128,6 @@ window.__ModuleLoader__.load({
       };
       const [draft, setDraft] = useDraft(mapped);
 
-      // 功能性提示词（与人设分开存 settings.prompts）
-      const promptsSettings = settings && settings.prompts ? settings.prompts : {};
-      // 内置默认（服务端 /api/state 下发）：文本为空时直接显示默认值，而不是留空
-      const promptDefaults = snapshot && snapshot.promptDefaults && typeof snapshot.promptDefaults === "object" ? snapshot.promptDefaults : {};
-      const mappedPrompts = {
-        toolGuide: {
-          enabled: !(promptsSettings.toolGuide && promptsSettings.toolGuide.enabled === false),
-          text: promptsSettings.toolGuide && typeof promptsSettings.toolGuide.text === "string" ? promptsSettings.toolGuide.text : "",
-        },
-        sendGuide: {
-          enabled: !(promptsSettings.sendGuide && promptsSettings.sendGuide.enabled === false),
-          text: promptsSettings.sendGuide && typeof promptsSettings.sendGuide.text === "string" ? promptsSettings.sendGuide.text : "",
-        },
-        rhythmGuide: {
-          enabled: !(promptsSettings.rhythmGuide && promptsSettings.rhythmGuide.enabled === false),
-          text: promptsSettings.rhythmGuide && typeof promptsSettings.rhythmGuide.text === "string" ? promptsSettings.rhythmGuide.text : "",
-        },
-        stickerGuide: {
-          enabled: !(promptsSettings.stickerGuide && promptsSettings.stickerGuide.enabled === false),
-          text: promptsSettings.stickerGuide && typeof promptsSettings.stickerGuide.text === "string" ? promptsSettings.stickerGuide.text : "",
-        },
-      };
-      const [promptsDraft, setPromptsDraft] = useDraft(mappedPrompts);
-      const [promptsStatus, runPrompts] = useSaver(props.reload);
 
       const [persona, setPersona] = react.useState(null);
       const [text, setText] = react.useState("");
@@ -2374,22 +3164,6 @@ window.__ModuleLoader__.load({
       const baseText = persona && typeof persona.text === "string" ? persona.text : "";
       const textDirty = persona !== null && text !== baseText;
       const settingsDirty = !sameJSON(draft, mapped);
-      const promptsDirty = !sameJSON(promptsDraft, mappedPrompts);
-
-      function patchPrompt(key, partial) {
-        setPromptsDraft(function (prev) {
-          const base = prev[key] && typeof prev[key] === "object" ? prev[key] : { enabled: true, text: "" };
-          const next = Object.assign({}, prev);
-          next[key] = Object.assign({}, base, partial);
-          return next;
-        });
-      }
-
-      function savePrompts() {
-        void runPrompts(async function () {
-          await apiPost(API + "/settings", { patch: { prompts: clone(promptsDraft) } });
-        }, "功能提示词已保存（下一条消息生效）");
-      }
 
       function patch(partial) {
         setDraft(function (prev) {
@@ -2428,81 +3202,6 @@ window.__ModuleLoader__.load({
             if (typeof props.reload === "function") await props.reload();
           },
         }),
-        h(
-          Card,
-          {
-            title: "功能提示词（与人格无关）",
-            hint: "发消息格式 / 工具约定 / 群聊节奏 / 表情包规则；下面显示的是当前生效文本（含内置默认）",
-          },
-          h(
-            "p",
-            { className: "qqb-help" },
-            "这些是行为约束，不写进 persona.md。文本框里直接显示当前生效内容：改了就保存为自定义，点「恢复默认」回到内置默认，关掉开关则完全不注入。",
-          ),
-          [
-            { key: "toolGuide", label: "工具与能力边界" },
-            { key: "sendGuide", label: "消息格式与长短" },
-            { key: "rhythmGuide", label: "群聊节奏" },
-            { key: "stickerGuide", label: "表情包规则" },
-          ].map(function (item) {
-            const entry = promptsDraft[item.key] || { enabled: true, text: "" };
-            const defaultText = typeof promptDefaults[item.key] === "string" ? promptDefaults[item.key] : "";
-            const customText = typeof entry.text === "string" ? entry.text : "";
-            const shown = customText !== "" ? customText : defaultText;
-            const usingDefault = customText === "";
-            return h(
-              "div",
-              { className: "qqb-field", key: item.key },
-              h(Switch, {
-                label: "启用「" + item.label + "」",
-                checked: entry.enabled !== false,
-                onChange: function (value) {
-                  patchPrompt(item.key, { enabled: value });
-                },
-              }),
-              entry.enabled !== false
-                ? h(
-                    "div",
-                    null,
-                    h(AreaField, {
-                      label: item.label + (usingDefault ? "（内置默认）" : "（自定义）"),
-                      rows: 8,
-                      value: shown,
-                      help: item.key === "stickerGuide"
-                        ? "保存后表情包库目录（随收藏变化）会自动追加在这段后面。"
-                        : "这里显示当前生效文本；修改后保存即覆盖内置默认。",
-                      onChange: function (value) {
-                        patchPrompt(item.key, { text: value });
-                      },
-                    }),
-                    usingDefault
-                      ? null
-                      : h(
-                          "div",
-                          { className: "qqb-toolbar" },
-                          h(
-                            "button",
-                            {
-                              type: "button",
-                              className: "qqb-btn qqb-btn--sm",
-                              onClick: function () {
-                                patchPrompt(item.key, { text: "" });
-                              },
-                            },
-                            "恢复默认",
-                          ),
-                        ),
-                  )
-                : null,
-            );
-          }),
-          h(SaveBar, {
-            dirty: promptsDirty,
-            status: promptsStatus,
-            onSave: savePrompts,
-            note: "功能提示词有未保存的修改",
-          }),
-        ),
         h(
           Card,
           { title: "人设内容", hint: "保存后下一轮对话立即生效" },
@@ -2762,7 +3461,7 @@ window.__ModuleLoader__.load({
             h("button", { type: "button", className: "qqb-btn qqb-btn--ghost", disabled: suggesting, onClick: function () { void loadSuggestions(); } }, suggesting ? "扫描中…" : "扫描长期记忆"),
           ),
           suggestStatus ? h("p", { className: "qqb-help" }, suggestStatus) : null,
-          suggestError ? h("p", { className: "qqb-note qqb-note--err" }, "⚠️ " + suggestError) : null,
+          suggestError ? h("p", { className: "qqb-note qqb-note--err" }, suggestError) : null,
           suggestions.length > 0
             ? h(
                 "div",
@@ -3117,7 +3816,7 @@ window.__ModuleLoader__.load({
                 }),
               )
             : null,
-          fileError ? h("p", { className: "qqb-note qqb-note--err" }, "⚠️ " + fileError) : null,
+          fileError ? h("p", { className: "qqb-note qqb-note--err" }, fileError) : null,
           currentFile
             ? h(
                 "div",
@@ -3240,7 +3939,7 @@ window.__ModuleLoader__.load({
             ),
           ),
           promptError
-            ? h("p", { className: "qqb-note qqb-note--err" }, "⚠️ " + promptError)
+            ? h("p", { className: "qqb-note qqb-note--err" }, promptError)
             : h("pre", { className: "qqb-pre" }, promptText || "（空）"),
         ),
       );
@@ -3943,32 +4642,327 @@ window.__ModuleLoader__.load({
       );
     }
 
-    // ── 组合 tab：回复与触发 / Agent 与模型 ──────────────────
-    function ReplyTab(props) {
+    // ═════════════════════════════════════════════════════════
+    // 页面适配层：把已有页面组件重新拼装成「工作区 → 页面」结构
+    // ═════════════════════════════════════════════════════════
+
+    /** 段落说明条：这篇改的是 prompt 的哪一段、当前排第几位。 */
+    function PromptNote(props) {
+      const prompt = usePromptInfo();
+      const ids = Array.isArray(props.ids) ? props.ids : [];
+      if (prompt.loading || prompt.error !== "") return null;
+      const sections = Array.isArray(prompt.data.sections) ? prompt.data.sections : [];
+      const order = Array.isArray(prompt.data.order) ? prompt.data.order : [];
+      const rows = ids
+        .map(function (id) {
+          const hit = sections.filter(function (item) { return item.id === id; })[0];
+          if (!hit) return null;
+          const rank = order.indexOf(id);
+          return h(
+            "span",
+            { key: id, className: "qqb-chip" + (rank === -1 ? " qqb-chip--off" : "") },
+            h("span", { className: "qqb-chip-label" }, hit.label),
+            h("span", { className: "qqb-chip-meta" }, rank === -1 ? "本次未注入" : "第 " + (rank + 1) + " 位"),
+          );
+        })
+        .filter(function (item) { return item !== null; });
+      if (rows.length === 0) return null;
       return h(
         "div",
-        { className: "qqb-page" },
-        h(FrequencyPage, props),
-        h(TriggersPage, props),
+        { className: "qqb-prompt-note" },
+        props.help ? h("p", { className: "qqb-help" }, props.help) : null,
+        h("div", { className: "qqb-chip-row" }, rows),
       );
     }
 
-    function AgentModelTab(props) {
+    /**
+     * 「提示词 → 身份与人格」：人设正文 + 人格卡。
+     * 口头禅已独立成页，不再挤在这里。
+     */
+    function PersonaTab(props) {
+      return h("div", { className: "qqb-page" }, h(PersonaPage, props));
+    }
+
+    /** 嵌入一个提示段的编辑器（不额外包 .qqb-page）。 */
+    function PromptSectionBlock(props) {
       return h(
         "div",
-        { className: "qqb-page" },
-        h(AgentPage, props),
-        h(ModelPage, props),
+        { className: "qqb-prompt-block" },
+        h(PromptSectionPage, {
+          snapshot: props.snapshot,
+          reload: props.reload,
+          sectionId: props.sectionId,
+          sectionLabel: props.sectionLabel,
+          inline: true,
+        }),
       );
     }
 
-    // ── 设置页 Section 主体 ──────────────────────────────────
+    /**
+     * 「对话 → 语气与分条」：分条是**行为设置**（bubbleSplit），
+     * 说什么、说多长是**提示词**（sendGuide / rhythmGuide）。
+     * 这里把两者放在一起，避免用户在两个 tab 之间来回找。
+     */
+    function MessageStylePage(props) {
+      const snapshot = props.snapshot;
+      const settings = snapshot && snapshot.settings ? snapshot.settings : null;
+      const reply = settings && settings.reply ? settings.reply : {};
+      const current = reply.bubbleSplit === "marker" || reply.bubbleSplit === "off" ? reply.bubbleSplit : "auto";
+      const [draft, setDraft] = react.useState(current);
+      const [status, run] = useSaver(props.reload);
+      react.useEffect(
+        function () {
+          setDraft(current);
+        },
+        [current],
+      );
+      if (!settings) return h("div", { className: "qqb-page" }, h(LoadingBlock, { text: "正在加载消息格式设置…" }));
+      const dirty = draft !== current;
+      return h(
+        "div",
+        { className: "qqb-page" },
+        h(
+          Card,
+          { title: "气泡拆分", hint: "模型输出的空行要不要发成多条消息" },
+          h(ChoiceGroup, {
+            label: "拆分方式",
+            value: draft,
+            options: [
+              { value: "auto", label: "空行自动拆（默认）" },
+              { value: "marker", label: "只发一条" },
+              { value: "off", label: "永不拆分" },
+            ],
+            onChange: setDraft,
+            help: "空行自动拆：模型用空行分段时每段发一条，更像真人连发。只发一条：空行当换行。想改「回几条 / 多长」请改下方的提示词。",
+          }),
+          h(SaveBar, {
+            dirty: dirty,
+            status: status,
+            onSave: function () {
+              void run(async function () {
+                await apiPost(API + "/settings", { patch: { reply: { bubbleSplit: draft } } });
+              }, "分条方式已保存");
+            },
+            note: "分条方式有未保存的修改",
+            label: "保存分条方式",
+          }),
+        ),
+        h(PromptNote, {
+          ids: ["sendGuide", "rhythmGuide"],
+          help: "下面两段直接进 system prompt：上面决定「物理上怎么拆」，这里决定「模型想怎么说话」。",
+        }),
+        h(PromptSectionBlock, { snapshot: snapshot, reload: props.reload, sectionId: "sendGuide", sectionLabel: "消息格式与长短" }),
+        h(PromptSectionBlock, { snapshot: snapshot, reload: props.reload, sectionId: "rhythmGuide", sectionLabel: "群聊节奏" }),
+      );
+    }
+
+    /**
+     * 「内容 → 表情包」：一个功能一个家。
+     * 顺序按"先想清楚怎么用，再管库"：启用开关等行为设置 → 注入 prompt 的使用规则 → 表情库 → 上传。
+     */
+    function StickersTabPage(props) {
+      return h(
+        "div",
+        { className: "qqb-page" },
+        h(StickersPage, Object.assign({}, props, { part: "settings" })),
+        h(PromptNote, {
+          ids: ["stickers"],
+          help: "下面这段是【表情包】提示段：管「什么时候发、发几张、要不要解释」。上面管「能不能发、带不带收藏工具」，再往下是「库里有什么」。",
+        }),
+        h(PromptSectionBlock, Object.assign({}, props, { sectionId: "stickers", sectionLabel: "表情包使用规则" })),
+        h(StickersPage, Object.assign({}, props, { part: "library" })),
+      );
+    }
+
+    /** 「提示词 → 说话方式」：消息格式 + 群聊节奏（纯提示词，不再混设置项）。 */
+    function SpeechPage(props) {
+      return h(
+        "div",
+        { className: "qqb-page" },
+        h(PromptNote, {
+          ids: ["sendGuide", "rhythmGuide"],
+          help: "这两段决定它「像不像在 QQ 里说话」。分条方式（发几条）属于行为设置，在「对话 → 语气与分条」。",
+        }),
+        h(PromptSectionBlock, Object.assign({}, props, { sectionId: "sendGuide", sectionLabel: "消息格式与长短" })),
+        h(PromptSectionBlock, Object.assign({}, props, { sectionId: "rhythmGuide", sectionLabel: "群聊节奏" })),
+      );
+    }
+
+    /**
+     * 「提示词 → 组装顺序」：看清 12 段各自做什么、排第几、本次是否注入。
+     * 每段尽量给一个"去编辑"的落点；纯动态生成的段标注为自动生成。
+     */
+    function PromptStructurePage(props) {
+      const info = usePromptInfo();
+      if (info.loading) return h("div", { className: "qqb-page" }, h(LoadingBlock, { text: "正在读取提示词结构…" }));
+      if (info.error !== "") return h("div", { className: "qqb-page" }, h(ErrorBlock, { text: "读取失败：" + info.error, onRetry: info.reload }));
+
+      const sections = Array.isArray(info.data.sections) ? info.data.sections : [];
+      const order = Array.isArray(info.data.order) ? info.data.order : [];
+      const byId = {};
+      for (const item of sections) byId[item.id] = item;
+      const ordered = [];
+      for (const id of order) if (byId[id]) ordered.push(Object.assign({ injected: true }, byId[id]));
+      for (const item of sections) if (order.indexOf(item.id) === -1) ordered.push(Object.assign({ injected: false }, item));
+
+      // 段 -> 可编辑它的页面（其余段由插件动态生成，只能整篇核对）
+      const EDIT_AT = {
+        identity: "identity",
+        safety: "safety",
+        toolGuide: "toolGuide",
+        sendGuide: "speech",
+        rhythmGuide: "speech",
+        phrases: "phrases",
+        stickers: "stickers",
+        scopeExtra: "identity",
+        memory: "memory",
+      };
+
+      return h(
+        "div",
+        { className: "qqb-page" },
+        h(
+          Card,
+          { title: "注入顺序总览", hint: "最重要的放开头与结尾，次要的在中间（规避模型注意力中段遗漏）" },
+          h(
+            "p",
+            { className: "qqb-help" },
+            "共 " + sections.length + " 段，本次注入 " + order.length + " 段。顺序由每段重要性自动决定，不需要手排。",
+          ),
+          h(
+            "ol",
+            { className: "qqb-order" },
+            ordered.map(function (item) {
+              const rank = order.indexOf(item.id);
+              const editor = EDIT_AT[item.id] || "";
+              return h(
+                "li",
+                { key: item.id, className: "qqb-order-item" + (item.injected ? "" : " qqb-order-item--off") },
+                h("span", { className: "qqb-order-pos" }, rank === -1 ? "—" : String(rank + 1)),
+                h(
+                  "span",
+                  { className: "qqb-order-label" },
+                  h("span", { className: "qqb-order-name" }, item.label),
+                  h(
+                    "span",
+                    { className: "qqb-order-meta" },
+                    h("span", { className: "qqb-order-pri" }, "重要性 " + item.priority),
+                    item.injected ? null : h("span", { className: "qqb-order-skip" }, "本次为空"),
+                    item.note ? h("span", { className: "qqb-order-note" }, item.note) : null,
+                  ),
+                ),
+                editor && typeof props.onNavigate === "function"
+                  ? h(
+                      "button",
+                      {
+                        type: "button",
+                        className: "qqb-btn qqb-btn--sm",
+                        onClick: function () {
+                          props.onNavigate(editor);
+                        },
+                      },
+                      "去编辑",
+                    )
+                  : h("span", { className: "qqb-order-auto" }, "自动生成"),
+              );
+            }),
+          ),
+        ),
+      );
+    }
+
+    // ── 设置页 Section 主体（工作区导航） ──────────────────────
+
+    /**
+     * 旧 schema 的提示段页面 id（promptSendGuide 等）→ 一个真实编辑器。
+     * 服务端没重启时页面仍是上一版结构，靠它保证点开不是空白/串页。
+     */
+    function LegacyPromptPage(sectionId, sectionLabel) {
+      function LegacyPage(props) {
+        return h(PromptSectionPage, {
+          snapshot: props.snapshot,
+          reload: props.reload,
+          sectionId: sectionId,
+          sectionLabel: sectionLabel,
+        });
+      }
+      return LegacyPage;
+    }
+
+    /** 页面找不到组件时的兜底：明确说明，而不是悄悄渲染成概览（那会让人以为配错了）。 */
+    function MissingPage(props) {
+      return h(
+        "div",
+        { className: "qqb-page" },
+        h(
+          Card,
+          { title: "这个页面在当前版本里被移走了", hint: props && props.widget ? "widget: " + props.widget : "" },
+          h(
+            "p",
+            { className: "qqb-help" },
+            "设置页结构由插件服务端下发。浏览器里是新版界面、但服务端还是旧版模块时，会出现这种「页面存在、组件不在」的情况。重启 dsh（或让插件重新加载）后就会一致。",
+          ),
+        ),
+      );
+    }
+
+    /**
+     * 取工作区里的页面列表。
+     * 兼容旧 schema（只有 children）：服务端升级而页面未刷新时仍按旧列表渲染，不会整页空白。
+     */
+    function itemsOf(section) {
+      if (!section) return [];
+      if (Array.isArray(section.items) && section.items.length > 0) return section.items;
+      const kids = Array.isArray(section.children) ? section.children : [];
+      return kids.map(function (child) {
+        return {
+          id: child.id,
+          label: child.label,
+          widget: child.widget || "",
+          desc: child.desc || "",
+          hotspot: child.hotspot === true,
+        };
+      });
+    }
+
+    /** 旧 tab id → 新（工作区, 页面）；旧书签与旧 onNavigate("prompts") 继续可用。 */
+    const VIEW_ALIASES = {
+      overview: ["overview", "overview"],
+      reply: ["dialog", "reply"],
+      dialog: ["dialog", "reply"],
+      frequency: ["dialog", "reply"],
+      triggers: ["dialog", "triggers"],
+      messageStyle: ["dialog", "messageStyle"],
+      ability: ["ability", "model"],
+      tools: ["ability", "tools"],
+      capabilities: ["ability", "tools"],
+      model: ["ability", "model"],
+      prompts: ["prompts", "promptOrder"],
+      persona: ["prompts", "identity"],
+      promptOrder: ["prompts", "promptOrder"],
+      promptFinal: ["prompts", "finalPrompt"],
+      speech: ["prompts", "speech"],
+      phrases: ["prompts", "phrases"],
+      promptToolGuide: ["prompts", "toolGuide"],
+      safety: ["security", "safety"],
+      content: ["content", "stickers"],
+      stickers: ["content", "stickers"],
+      memory: ["content", "memory"],
+      commands: ["security", "commands"],
+      security: ["security", "commands"],
+    };
+
     function Section() {
       useStyles();
-      const [tab, setTab] = react.useState("overview");
+      // 当前工作区（顶部导航）与该工作区内的页面（左栏）
+      const [view, setView] = react.useState("overview");
+      const [page, setPage] = react.useState("overview");
+      const [schema, setSchema] = react.useState(null);
       const [snapshot, setSnapshot] = react.useState(null);
       const [loadError, setLoadError] = react.useState("");
       const [refreshing, setRefreshing] = react.useState(false);
+      const [toast, setToast] = react.useState("");
+      const toastTimer = react.useRef(null);
 
       const reload = react.useCallback(async function () {
         setRefreshing(true);
@@ -3992,23 +4986,142 @@ window.__ModuleLoader__.load({
         [reload],
       );
 
+      // 结构声明由服务端下发（lib/settings-schema.js）：加设置页无需改前端
+      react.useEffect(function () {
+        void (async function () {
+          try {
+            const data = await apiGet(API + "/schema");
+            setSchema(data);
+          } catch (error) {
+            setSchema(null);
+          }
+        })();
+      }, []);
+
+      /** 页头短暂提示（页面内小操作完成后回报，不打断当前页面）。 */
+      const notify = react.useCallback(function (text) {
+        if (typeof text !== "string" || text === "") return;
+        setToast(text);
+        if (toastTimer.current) clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(function () {
+          setToast("");
+        }, 6000);
+      }, []);
+      react.useEffect(
+        function () {
+          return function () {
+            if (toastTimer.current) clearTimeout(toastTimer.current);
+          };
+        },
+        [],
+      );
+
       const bot = snapshot && snapshot.bot ? snapshot.bot : {};
       const ready = bot.ready === true;
       const configured = typeof bot.appId === "string" && bot.appId !== "";
       const badgeText = !snapshot ? "加载中…" : ready ? "已连接" : configured ? "未连接" : "未配置凭据";
       const badgeClass = ready ? "qqb-badge--ok" : configured ? "qqb-badge--warn" : "qqb-badge--off";
 
-      const pages = {
+      // widget id -> 组件（schema 里的 widget 字段指向这里）
+      const widgets = {
         overview: OverviewPage,
-        reply: ReplyTab,
-        agent: AgentModelTab,
-        persona: PersonaPage,
-        phrases: PhrasesPage,
-        stickers: StickersPage,
+        // 对话
+        frequency: FrequencyTabPage,
+        triggers: TriggersTabPage,
+        messageStyle: MessageStylePage,
+        // 能力
+        model: ModelPage,
+        tools: CapabilitiesTabPage,
+        // 提示词
+        promptOrder: PromptStructurePage,
+        persona: PersonaTab,
+        speech: SpeechPage,
+        phrases: PhrasesTabPage,
+        toolGuide: PromptToolGuidePage,
+        promptFinal: PromptFinalPage,
+        // 内容
+        stickers: StickersTabPage,
         memory: MemoryPage,
+        // 权限
         commands: CommandsPage,
+        safety: SafetyPage,
+        // ── 旧 schema 兼容（服务端未重启时页面仍是上一版结构，这里保证每页都有真实组件）──
+        promptToolGuide: PromptToolGuidePage,
+        promptSendGuide: LegacyPromptPage("sendGuide", "消息格式与长短"),
+        promptRhythmGuide: LegacyPromptPage("rhythmGuide", "群聊节奏"),
+        promptStickerGuide: LegacyPromptPage("stickers", "表情包使用规则"),
+        promptSafety: SafetyPage,
       };
-      const ActivePage = pages[tab] || OverviewPage;
+
+      /** widget id → 组件；找不到时返回明确的缺失提示，不静默退回概览。 */
+      function resolvePage(item) {
+        if (!item) return MissingPage;
+        const widget = item.widget || "";
+        if (widgets[widget]) return widgets[widget];
+        // 有 children 但没 widget 的工作区（旧 schema 里不太会出现，防御）
+        return function MissingPageBound(props) {
+          return h(MissingPage, { widget: widget, snapshot: props && props.snapshot });
+        };
+      }
+
+      const sections = schema && Array.isArray(schema.sections) ? schema.sections : [];
+      const currentSection = sections.filter(function (item) { return item.id === view; })[0] || null;
+      const items = itemsOf(currentSection);
+      const currentItem = items.filter(function (item) { return item.id === page; })[0] || items[0] || null;
+      const ActivePage = resolvePage(currentItem);
+      const showSidebar = items.length > 1;
+
+      /** 切工作区：落到它的落地页。 */
+      function openSection(sectionId) {
+        const section = sections.filter(function (item) { return item.id === sectionId; })[0] || null;
+        if (!section) return;
+        const kids = itemsOf(section);
+        const landing =
+          section.landing && kids.some(function (item) { return item.id === section.landing; })
+            ? section.landing
+            : kids.length > 0
+              ? kids[0].id
+              : "overview";
+        setView(section.id);
+        setPage(landing);
+      }
+
+      /**
+       * 统一跳转：target 可以是工作区 id、页面 id（含旧 id / widget 名）。
+       * 供各设置页内部「去编辑…」链接使用。
+       */
+      function navigate(target) {
+        if (typeof target !== "string" || target === "") return;
+        const top = sections.filter(function (item) { return item.id === target; })[0];
+        if (top) {
+          openSection(top.id);
+          return;
+        }
+        for (const section of sections) {
+          const kids = itemsOf(section);
+          const hit = kids.filter(function (child) {
+            return child.id === target || child.widget === target;
+          })[0];
+          if (hit) {
+            setView(section.id);
+            setPage(hit.id);
+            return;
+          }
+        }
+        const alias = VIEW_ALIASES[target];
+        if (alias) {
+          setView(alias[0]);
+          setPage(alias[1]);
+        }
+      }
+
+      const pageProps = {
+        key: view + "/" + page,
+        snapshot: snapshot,
+        reload: reload,
+        onNavigate: navigate,
+        onNotify: notify,
+      };
 
       return h(
         "div",
@@ -4019,12 +5132,18 @@ window.__ModuleLoader__.load({
           h(
             "div",
             { className: "qqb-head-main" },
-            h("h2", { className: "qqb-title" }, "QQ 机器人"),
-            h("p", { className: "qqb-sub" }, "回复与触发 · Agent 与模型 · 人设与人格卡 · 口头禅 · 表情包 · 记忆与自我改进 · 命令与权限"),
+            h(
+              "div",
+              { className: "qqb-title-row" },
+              h("h2", { className: "qqb-title" }, "QQ 机器人"),
+              h("span", { className: "qqb-version" }, "dsh-qqbot-buddy v" + ((snapshot && snapshot.version) || "—")),
+            ),
+            h("p", { className: "qqb-sub" }, "连接状态、对话节奏、能力与模型、人设提示词、表情与记忆、命令与权限"),
           ),
           h(
             "div",
             { className: "qqb-head-status" },
+            toast ? h("span", { className: "qqb-toast", role: "status" }, toast) : null,
             h("span", { className: "qqb-badge " + badgeClass }, badgeText),
             h(
               "button",
@@ -4043,9 +5162,9 @@ window.__ModuleLoader__.load({
         loadError ? h(ErrorBlock, { text: "读取状态失败：" + loadError, onRetry: reload }) : null,
         h(
           "nav",
-          { className: "qqb-tabs", role: "tablist" },
-          TABS.map(function (item) {
-            const active = tab === item.id;
+          { className: "qqb-tabs", role: "tablist", "aria-label": "QQ 机器人设置分区" },
+          sections.map(function (item) {
+            const active = view === item.id;
             return h(
               "button",
               {
@@ -4054,15 +5173,71 @@ window.__ModuleLoader__.load({
                 role: "tab",
                 "aria-selected": active ? "true" : "false",
                 className: "qqb-tab" + (active ? " qqb-tab--active" : ""),
+                title: item.desc || "",
                 onClick: function () {
-                  setTab(item.id);
+                  openSection(item.id);
                 },
               },
-              item.label,
+              h("span", { className: "qqb-tab-label" }, item.label),
             );
           }),
         ),
-        h(ActivePage, { snapshot: snapshot, reload: reload }),
+        showSidebar
+          ? h(
+              "div",
+              { className: "qqb-workspace" },
+              h(
+                "aside",
+                { className: "qqb-side", "aria-label": "分区内页面" },
+                h(
+                  "div",
+                  { className: "qqb-side-head" },
+                  h("span", { className: "qqb-side-title" }, currentSection ? currentSection.label : ""),
+                  h("span", { className: "qqb-side-count" }, items.length + " 页"),
+                ),
+                currentSection && currentSection.desc ? h("p", { className: "qqb-side-desc" }, currentSection.desc) : null,
+                h(
+                  "div",
+                  { className: "qqb-side-list", role: "tablist", "aria-orientation": "vertical" },
+                  items.map(function (item) {
+                    const active = currentItem !== null && currentItem.id === item.id;
+                    return h(
+                      "button",
+                      {
+                        key: item.id,
+                        type: "button",
+                        role: "tab",
+                        "aria-selected": active ? "true" : "false",
+                        className: "qqb-side-item" + (active ? " qqb-side-item--active" : ""),
+                        title: item.desc || "",
+                        onClick: function () {
+                          setPage(item.id);
+                        },
+                      },
+                      h("span", { className: "qqb-side-item-label" }, item.label),
+                    );
+                  }),
+                ),
+              ),
+              h(
+                "div",
+                { className: "qqb-main" },
+                h(
+                  "div",
+                  { className: "qqb-page-head" },
+                  h(
+                    "div",
+                    { className: "qqb-page-path" },
+                    h("span", null, currentSection ? currentSection.label : ""),
+                    h("span", { className: "qqb-page-path-sep" }, "/"),
+                    h("span", { className: "qqb-page-path-current" }, currentItem ? currentItem.label : ""),
+                  ),
+                  currentItem && currentItem.desc ? h("p", { className: "qqb-page-desc" }, currentItem.desc) : null,
+                ),
+                h(ActivePage, pageProps),
+              ),
+            )
+          : h("div", { className: "qqb-body" }, h(ActivePage, pageProps)),
       );
     }
 

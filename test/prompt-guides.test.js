@@ -114,8 +114,10 @@ test('resolveGuide / guideEnabled 语义', () => {
 });
 
 
-test('默认功能提示词已承载原人设里的功能内容（能力边界/格式/清单规则）', () => {
-  assert.ok(DEFAULT_FUNCTION_PROMPTS.toolGuide.includes('【能力边界】'));
+test('默认功能提示词已承载原人设里的功能内容（工具约定/格式/清单规则）', () => {
+  // 【能力边界】自 v0.8 起由 renderCapabilityGuide 按已启用能力动态生成，
+  // 静态默认文本里只保留「工具使用约定 + 安全」。
+  assert.ok(!DEFAULT_FUNCTION_PROMPTS.toolGuide.includes('【能力边界】'), '能力边界不应再写死在静态文本里');
   assert.ok(DEFAULT_FUNCTION_PROMPTS.toolGuide.includes('【安全】'));
   assert.ok(DEFAULT_FUNCTION_PROMPTS.toolGuide.includes('qqbot_describe_image'));
   assert.ok(DEFAULT_FUNCTION_PROMPTS.sendGuide.includes('【群聊消息格式】'));
@@ -123,4 +125,28 @@ test('默认功能提示词已承载原人设里的功能内容（能力边界/�
   assert.ok(DEFAULT_FUNCTION_PROMPTS.sendGuide.includes('[[msg]]'));
   // 人设层不该再重复这些功能文案（由 persona.md 维护，这里只校验默认不等于功能段）
   assert.notEqual(DEFAULT_FUNCTION_PROMPTS.sendGuide, DEFAULT_FUNCTION_PROMPTS.toolGuide);
+});
+
+test('renderCapabilityGuide：只列出已启用能力，空能力有兜底文案', async () => {
+  const { renderCapabilityGuide } = await import('../lib/prompt-guides.js');
+  assert.match(renderCapabilityGuide([]), /没有可用的工具能力/);
+
+  const text = renderCapabilityGuide([
+    { id: 'workspace', label: '工作区读写', boundary: '读写当前工作区里的文件。' },
+    { id: 'imagegen', label: '图片生成', boundary: '可以生成或编辑图片，生成后用 qqbot_send_file 发出去。' },
+  ]);
+  assert.match(text, /【能力边界】/);
+  assert.match(text, /1\. 读写当前工作区里的文件。/);
+  assert.match(text, /2\. 可以生成或编辑图片/);
+  assert.ok(!text.includes('联网'), '未启用的能力不应出现');
+});
+
+test('renderCapabilityGuide：忽略缺少 boundary 的条目', async () => {
+  const { renderCapabilityGuide } = await import('../lib/prompt-guides.js');
+  const text = renderCapabilityGuide([
+    { id: 'a', label: 'A', boundary: '能做 A。' },
+    { id: 'b', label: 'B', boundary: '' },
+  ]);
+  assert.match(text, /能做 A/);
+  assert.ok(!text.includes('B'), '空边界条目应被过滤');
 });

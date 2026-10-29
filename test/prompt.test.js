@@ -72,6 +72,75 @@ function makeComposer({ settings, personaStore, memoryStore, logger } = {}) {
   });
 }
 
+test('提示段覆盖：settings.prompts.sections.<sectionId> 能覆盖内置段（stickers 的 id 与默认键不同名）', () => {
+  // 表情包段的 id 是 stickers，默认文本键是 stickerGuide：这里锁住"按段 id 覆盖"这条路径，
+  // 避免设置页把覆盖写进 prompts.sections.stickerGuide 却永远不生效。
+  const composer = makeComposer({
+    settings: makeSettings({
+      prompts: {
+        sections: {
+          stickers: { enabled: true, text: '【自定义表情包规则】只在深夜发表情。' },
+          sendGuide: { enabled: true, text: '【自定义消息格式】每次最多两条。' },
+        },
+      },
+    }),
+  });
+  const text = composer.compose({ scope: 'group' });
+  assert.match(text, /自定义表情包规则/);
+  assert.match(text, /自定义消息格式/);
+  assert.doesNotMatch(text, /想发表情包时调用 qqbot_send_file/);
+  const ids = composer.lastSections().map((item) => item.id);
+  assert.ok(ids.includes('stickers'), '段 id 应为 stickers');
+  assert.ok(!ids.includes('stickerGuide'), '不应出现用 storage 键名伪装的段 id');
+});
+
+test('表情包频率：settings.stickers.frequency 改写【表情包】段的节奏指引', () => {
+  const expected = {
+    off: /不要主动发表情包/,
+    rare: /每 10~15 轮/,
+    normal: /每 3~5 轮/,
+    often: /每 1~2 轮/,
+  };
+  for (const [level, pattern] of Object.entries(expected)) {
+    const composer = makeComposer({ settings: makeSettings({ stickers: { frequency: level } }) });
+    const text = composer.compose({ scope: 'group' });
+    assert.match(text, pattern, level + ' 档应注入对应节奏');
+    // 基础规则仍在：频率只是追加一行，不会顶掉「怎么发」
+    assert.match(text, /想发表情包时调用 qqbot_send_file/);
+    const detail = composer.lastSections().find((item) => item.id === 'stickers');
+    assert.ok(detail, '应有 stickers 段');
+    assert.equal(detail.text.split('【发送频率】').length - 1, 1, '频率行只应出现一次');
+  }
+});
+
+test('表情包频率：用户自定义整段规则时不再追加频率行（尊重用户写法）', () => {
+  const composer = makeComposer({
+    settings: makeSettings({
+      stickers: { frequency: 'often' },
+      prompts: { stickerGuide: { enabled: true, text: '【自定义表情包】只在被要求时发。' } },
+    }),
+  });
+  const text = composer.compose({ scope: 'group' });
+  assert.match(text, /【自定义表情包】/);
+  assert.doesNotMatch(text, /【发送频率】/);
+});
+
+test('表情包频率：表情包能力关闭时不注入该段（频率也不生效）', () => {
+  const composer = makeComposer({
+    settings: makeSettings({ features: { stickers: false }, stickers: { frequency: 'often' } }),
+  });
+  const text = composer.compose({ scope: 'group' });
+  assert.doesNotMatch(text, /【表情包】/);
+  assert.ok(!composer.lastOrder().includes('stickers'));
+});
+test('提示段覆盖：enabled=false 时该段完全不注入', () => {
+  const composer = makeComposer({
+    settings: makeSettings({ prompts: { sections: { stickers: { enabled: false, text: '' } } } }),
+  });
+  const text = composer.compose({ scope: 'group' });
+  assert.doesNotMatch(text, /想发表情包时调用 qqbot_send_file/);
+  assert.ok(!composer.lastOrder().includes('stickers'));
+});
 /** 构造带 systemPrompt 服务的 agentCtx，记录 section/suppress/effect。 */
 function makeAgentCtx({ order = 42, orderThrows = false, sectionThrows = false } = {}) {
   const sections = [];

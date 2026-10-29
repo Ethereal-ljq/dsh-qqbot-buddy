@@ -832,10 +832,72 @@ createStickerStore({ settings, logger }) => {
   若该卡是使用中的卡，保存后再 activate 一次以同步人设并备份旧人设）。
 - index.js 动态装配 runtime.personaCards（失败降级）。
 
-## 设置页 8 tab
-- 概览 / 回复与触发 / Agent 与模型 / 人设 / 口头禅 / 表情包 / 记忆与自我改进 / 命令与权限。
-- 回复与触发 = FrequencyPage + TriggersPage；Agent 与模型 = AgentPage + ModelPage。
-- 人设页顶部人格卡面板；命令页展示 COMMAND_CATALOG + 管理员设置。
+## 设置页 IA（v0.15「工作区 → 页面」重设计）
+- 结构声明仍在 lib/settings-schema.js（单一真相，前端只是渲染器）：
+  `SETTINGS_GROUPS`（6 个工作区）+ `SETTINGS_SECTIONS`（工作区 → items 页面）。
+  每个页面 `{id, label, widget, desc, hotspot}`；`widget` 指向 client/client.js 的 widgets 表。
+  `schemaPayload()` 同时下发 `items` 与兼容字段 `children`（旧客户端可读）。
+- 6 个工作区：📊概览 / 💬对话 / 🧰能力 / 📝提示词 / 🗂内容 / 🔐权限（共 16 个页面）。
+- 交互（client/client.js 的 Section）：
+  - 顶部是工作区 tab（带图标与页数徽标），下面是页面切换；
+  - **窄容器（宿主设置面板通常 ~700px）用横向胶囊行**，用 container query 在 ≥900px 时升级成左侧 rail；
+    不用 media query，因为面板宽度 ≠ 视口宽度；
+  - 面包屑（工作区 / 页面）+ 页面一句话说明；
+  - 页头 `toast`：页面内小操作（如一键放行工具）完成后回报，不打断当前页；
+  - `VIEW_ALIASES`：旧 tab id → (工作区, 页面)，旧书签/旧 `onNavigate("prompts")` 继续可用。
+- 分页原则「一个功能只有一个家」：
+  - 行为的"发几条"（bubbleSplit）在 对话→语气与分条；提示词里"怎么写"在 提示词→说话方式；两页互链、互不重复；
+  - 安全红线从提示词挪到 权限（它是约束，不是人设）；
+  - 模型从"Agent 与模型"里独立成 能力→模型与预设，能力开关留在 能力→能力与工具；
+  - 口头禅独立成页，不再挤在人设页。
+- 新增/复用的前端组件：`MessageStylePage`（气泡拆分 + 两段提示词）、`SpeechPage`（纯提示词两段）、
+  `PromptStructurePage`（顺序总览 + 去编辑落点）、`PromptNote`（段位 chips：第几位 / 本次未注入）；
+  `PromptSectionPage` 增加 `inline` 模式，可嵌进别的页面而不重复 `.qqb-page` 间距。
+
+## 视觉语言（v0.15.1：对齐 dsh 官方 primitives / 插件市场）
+- **不用 emoji**：标题、导航、状态、错误提示全部纯文字；层次只靠字号（16/13/12/11）、字重（400/500/600）、
+  灰阶（label-primary / secondary / tertiary）和 1px 细线（border-l2 / l3）表达。
+- **颜色只走 --dsw-alias-* 令牌**，浅色/深色主题自动跟随；fallback 只是兜底色。
+  深浅两套都实测过：深色下 `brand-primary` 解析为近白色（#f9fafb），所以选中态在深色里是"白字 + 白线"，
+  与插件市场的选中 tab 完全一致；浅色下才是蓝色。
+- **一级导航** = 官方 tab 形态：13px 文字、2px 底线、选中加粗走 brand；页数写成 `提示词 (6)` 文本，
+  不用徽标气泡（市场里 `已安装 (7)` 就是这个写法）。
+- **二级导航** = 胶囊 chip（官方 capChip）：12px、999px 圆角、细边；选中态用 `bg-layer-3` 实底、无边框，
+  深色下才看得出层次。不再用"常用圆点"这类装饰。
+- **卡片**：8px 圆角 + 细边 + 透明底（市场里分区是平的），标题 13/600，hint 12px 灰；
+  列表用 1px 下划线分隔，不再用一层层"框套框"。
+- **按钮**：默认细边描边；`--primary` = 反色实心（label-primary 填充），深色下就是市场里那颗浅色主按钮。
+- **开关**：官方开关观感——关=border-l3 灰轨、开=brand 轨（深色=白轨 + 深色滑块）。
+- **分段控件**：胶囊内嵌，选中用浅底 + 细描边，不整块填主色。
+- 键盘可达性：tab / chip / 按钮 / 开关 / 分段项统一 `focus-visible` 2px brand 轮廓。
+- 覆盖测试：test/settings-schema.test.js 校验每个 `widget` 都能在 client.js 的 widgets 表里找到（防止点开空白）。
+
+### 表情包段的两套键名（2026-10-29 修复）
+提示词有两套机制，段 id 与存储键**不一定同名**，踩过一次坑：
+
+| 机制 | 存哪 | 谁读 |
+| --- | --- | --- |
+| 逐段覆盖 | `settings.prompts.sections.<段id>` | `compose()` 里 `readSectionOverride(cfg, section.id)`，命中就直接用该文本 |
+| 功能提示词 | `settings.prompts.<key>`（toolGuide/sendGuide/rhythmGuide/stickerGuide） | 各段 renderer（`resolveGuide`），是"默认文案 + 开关" |
+
+- 表情包段：段 id = `stickers`（prompt-sections.js），默认文案键 = `stickerGuide`（prompt-guides.js / `/api/prompt` 的 `defaults`）。
+- 旧设置页用 `sectionId: "stickerGuide"`：`details` 里查不到（那是段 id 不是键名）、`defaults` 恰好能查到 → 页面显示空编辑器；
+  保存写进 `prompts.sections.stickerGuide`，而 `compose()` 只读 `prompts.sections.stickers` → **编辑永远不生效**。
+- 现在：页面用 `sectionId: "stickers"`，`PromptSectionPage` 通过 `PROMPT_DEFAULT_KEY` 把默认文案键翻成 `stickerGuide`；
+  `test/settings-schema.test.js` 会扫描 client.js 里所有 `sectionId:` / `LegacyPromptPage(...)`，断言它们都在 PROMPT_SECTIONS 里；
+  `test/prompt.test.js` 锁住"按段 id 覆盖生效 / enabled=false 不注入"。
+- 表情包页的阅读顺序：`表情包设置`（能不能发、带不带收藏、发多勤）× `表情包使用规则`（注入的提示段）× `表情库/上传`；
+  三段由 `StickersTabPage` 组合，`StickersPage` 增加 `part: "settings" | "library"` 以复用同一份组件。
+
+## 表情包发送频率（v0.15.1）
+- 设置项：`settings.stickers.frequency`，四档 `off | rare | normal | often`，默认 `normal`（等价旧行为"每 3~5 轮"）。
+- 只做**提示词节奏指引**，不做硬拦截：`lib/prompt.js` 的表情包段在"内置规则文本"后追加一行
+  `【发送频率】…`（文案在 `lib/prompt-guides.js` 的 `STICKER_FREQUENCY_LINES`）。发不发仍由模型决定，
+  避免出现"工具被拦、表情攒着发不出去"。
+- 尊重用户写法：用户若自定义整段 `prompts.stickerGuide.text`，不再追加频率行。
+- 归一化：`enumStr(..., STICKER_FREQUENCY_LEVELS, 'normal')`，未知值回退 `normal`，只有变化才落盘并广播。
+- 覆盖测试：`test/settings-store.test.js`（默认/四档/未知回退/变更列表）、
+  `test/prompt.test.js`（四档注入对应节奏、自定义文本不追加、能力关闭不注入）。
 
 ## 命令目录 + 管理员
 - commands.js 导出冻结 COMMAND_CATALOG（help/ping/status/id/new/reset/clear/resume/stop）与 adminStatus()；

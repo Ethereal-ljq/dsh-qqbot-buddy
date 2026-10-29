@@ -115,9 +115,10 @@ test('adminStatus：enabled/configured/enforced/isAdmin/allowed 矩阵', () => {
   assert.equal(s.allowed, true);
 
   s = adminStatus(enforcedCfg, 'u-x', '管理员');
-  assert.equal(s.isAdmin, true);
-  assert.equal(s.matchedBy, 'name');
-  assert.equal(s.allowed, true);
+  // v0.11：昵称不再参与判定（任何人改群昵称即可冒充管理员，且跨群昵称不同）
+  assert.equal(s.isAdmin, false);
+  assert.equal(s.matchedBy, '');
+  assert.equal(s.allowed, false);
 
   s = adminStatus(enforcedCfg, 'u-x', '路人');
   assert.equal(s.isAdmin, false);
@@ -358,4 +359,30 @@ test('handleCommand：/help 与 /id 在设置读取失败时降级为未启用',
   });
   assert.ok(idText.includes('门控未启用'));
   assert.ok(idText.includes('u1'));
+});
+
+test('stripLeadingMentions：剥离 openid 形态的 @ 提及（SDK 只认纯数字）', async () => {
+  const { stripLeadingMentions } = await import('../lib/qq/commands.js');
+  // 新版 QQ 群：mention 用 openid（字母数字混合），SDK 的 <@!?\d+> 正则剥不掉
+  assert.equal(stripLeadingMentions('<@!5F23DAE1EBC75E95C88C160AC350A6A0> /new'), '/new');
+  assert.equal(stripLeadingMentions('<@123456789> /help'), '/help');
+  assert.equal(stripLeadingMentions('<@!a> <@!b> /status'), '/status');
+  assert.equal(stripLeadingMentions('/ping'), '/ping');
+  assert.equal(stripLeadingMentions('   /id   '), '/id');
+  assert.equal(stripLeadingMentions('普通消息'), '普通消息');
+  assert.equal(stripLeadingMentions(''), '');
+  assert.equal(stripLeadingMentions(undefined), '');
+});
+
+test('adminStatus：只按 openid 判定，昵称不再生效（防冒充）', async () => {
+  const { adminStatus } = await import('../lib/qq/commands.js');
+  const cfg = { admin: { enabled: true, openids: ['OPENID_A'], names: ['小明'] } };
+  assert.equal(adminStatus(cfg, 'OPENID_A', '路人').isAdmin, true);
+  assert.equal(adminStatus(cfg, 'OPENID_A', '路人').matchedBy, 'openid');
+  // 昵称冒充应失败
+  assert.equal(adminStatus(cfg, 'OTHER', '小明').isAdmin, false, '昵称不应再命中');
+  assert.equal(adminStatus(cfg, 'OTHER', '小明').allowed, false);
+  // 只配 names 视为未配置 -> 不强制门控（保持旧行为）
+  const namesOnly = { admin: { enabled: true, openids: [], names: ['小明'] } };
+  assert.equal(adminStatus(namesOnly, 'OTHER', '小明').enforced, false);
 });
