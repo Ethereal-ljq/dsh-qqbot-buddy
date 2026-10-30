@@ -1028,3 +1028,12 @@ createStickerStore({ settings, logger }) => {
   - 同一时间只展开一位（accordion），保存/取消即收起；删除支持从行内直接删。
 - 新增样式 `.qqb-accordion*`（沿用现有 qqb 设计变量，无新增依赖）。
 - API 与数据结构不变（/members/save、/members/adopt、/members/delete）。
+# v0.18.2（2026-10-30）：旧记忆 → 群友备注一次性回填
+
+- 新增 `lib/members/memory-backfill.js`：`backfillMemberNotesFromMemory({memory,members,stateDir,logger})`。
+  - 读取 `memory.index().facts`，按成员昵称/别名做纯文本包含匹配（长度 ≥2）；
+  - 每位成员取最近最多 5 条事实，拼成一句备注（；分隔，≤480 字）；
+  - 写入走 `members.applyAutoNote`：空正文写正文、自动正文可更新、人工备注只进 `meta.autoNotes`；
+  - 幂等：marker `<stateDir>/memory-backfill-v1.json`，存在即跳过。
+- runtime 在 members 初始化后调用一次（失败只 warn，不影响启动）。
+- 背景：旧版本没有群友库，升级后成员条目只有名字没有备注，本次补齐历史信息；新增事实仍由自动提炼/工具维护。
