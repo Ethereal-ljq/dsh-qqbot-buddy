@@ -139,3 +139,48 @@ test('提炼：unknown openid 跳过，不新建成员', async () => {
   assert.ok(result.skipped.some((row) => row.reason === 'not-found'));
   assert.equal(store.list({}).total, 1);
 });
+
+test('候选匹配：按 [昵称 (openid)] 标签精确匹配，且允许模型只返回 name', async () => {
+  const { store, settings } = makeEnv({ perMemberHours: 0 });
+  store.visit({ groupId: 'g1', openid: 'U1', name: '阿岚' });
+  const extractor = makeExtractor({
+    store,
+    settings,
+    reply: JSON.stringify({ members: [{ name: '阿岚', personality: ['直爽'], confidence: 0.9 }] }),
+  });
+  // 文本里显示名是「岚岚」，但标签 openid 是 U1
+  const result = await extractor.extractNow(null, { transcript: '[岚岚 (U1)] 我性子直，有啥说啥', groupId: 'g1' });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.candidates, ['阿岚']);
+  assert.equal(result.updated.length, 1);
+  assert.deepEqual(store.getByOpenid('U1').meta.profile.personality, ['直爽']);
+});
+
+test('默认配置：6 轮 / 3 人 / 2 小时 / 12 条消息触发', () => {
+  const { store, settings } = makeEnv({ perMemberHours: undefined, everyRounds: undefined, maxMembers: undefined, minNewMessages: undefined, minIntervalMinutes: undefined });
+  const extractor = makeExtractor({ store, settings, reply: '{}' });
+  const cfg = extractor.config();
+  assert.equal(cfg.everyRounds, 6);
+  assert.equal(cfg.maxMembers, 3);
+  assert.equal(cfg.perMemberHours, 2);
+  assert.equal(cfg.minNewMessages, 12);
+  assert.equal(cfg.minIntervalMinutes, 10);
+});
+
+test('模型没返回 affinity 时，不清空已有关系', async () => {
+  const { store, settings } = makeEnv({ perMemberHours: 0 });
+  store.visit({ groupId: 'g1', openid: 'U1', name: '阿岚' });
+  const member = store.getByOpenid('U1');
+  store.updateProfile(member.id, { profile: { affinity: { level: 2, note: '老朋友' } }, source: 'manual' });
+  const extractor = makeExtractor({
+    store,
+    settings,
+    reply: JSON.stringify({ members: [{ openid: 'U1', name: '阿岚', personality: ['直爽'], confidence: 0.9 }] }),
+  });
+  const result = await extractor.extractNow(null, { transcript: '[阿岚 (U1)] 我性子直', groupId: 'g1' });
+  assert.equal(result.updated.length, 1);
+  const after = store.getByOpenid('U1');
+  assert.equal(after.meta.profile.affinity.level, 2);
+  assert.equal(after.meta.profile.affinity.note, '老朋友');
+  assert.deepEqual(after.meta.profile.personality, ['直爽']);
+});

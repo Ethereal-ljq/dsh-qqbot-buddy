@@ -1064,3 +1064,15 @@ createStickerStore({ settings, logger }) => {
 ## 知识库编辑
 - KnowledgePage 改为行内手风琴：编辑已有条目在行内展开（newEntryCard 仅用于新建），
   取消/保存/删除在展开区内；与 MembersPage 同一套 .qqb-accordion 样式。
+
+# v0.19.1（2026-10-30）：群友画像提炼产量修复
+
+- 候选匹配（lib/members/profile-extract.js collectCandidates）：
+  1) 解析 `[昵称 (openid)]` 标签，openid 精确匹配成员（显示名可与库内昵称不同）；
+  2) 昵称/别名/常见称呼文本匹配；
+  3) 不足 3 人时补当前群最近活跃群友（最多 6 个候选）。
+- 解析：允许模型只返回 name（openid 可空）；`hasAffinity` 标记，模型没给 affinity 时不清空已有关系。
+- 触发：noteTurnEnd 双条件（每 N 轮 / 新增消息数 ≥ minNewMessages 且距上次 ≥ minIntervalMinutes），
+  默认 everyRounds 6、maxMembers 3、perMemberHours 2h、minNewMessages 12、minIntervalMinutes 10。
+- 手动提炼（API 带 transcript 或 UI「立即提炼」）：maxRows = min(8, max(maxMembers, candidates))；
+  API 返回 candidates 名单，UI 展示候选/跳过原因。

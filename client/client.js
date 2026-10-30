@@ -6720,8 +6720,23 @@ window.__ModuleLoader__.load({
             groupId: groupId,
           });
           const updated = Array.isArray(result.updated) ? result.updated.length : 0;
-          const skipped = Array.isArray(result.skipped) ? result.skipped.length : 0;
-          setMembersExtractNote("提炼完成：更新 " + updated + " 位" + (skipped > 0 ? "，跳过 " + skipped + " 位" : ""));
+          const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+          const candidates = Array.isArray(result.candidates) ? result.candidates : [];
+          const reasons = {};
+          for (const row of skipped) {
+            const reason = row && typeof row.reason === "string" ? row.reason : "skipped";
+            reasons[reason] = (reasons[reason] || 0) + 1;
+          }
+          const reasonText = Object.keys(reasons)
+            .map(function (key) {
+              return key + " " + reasons[key];
+            })
+            .join("，");
+          setMembersExtractNote(
+            "提炼完成：更新 " + updated + " 位"
+            + (candidates.length > 0 ? "（候选：" + candidates.join("、") + "）" : "")
+            + (skipped.length > 0 ? "；跳过 " + skipped.length + " 位（" + reasonText + "）" : ""),
+          );
           setMembersExtractTranscript("");
           await loadList();
           await loadMembersExtractStats();
@@ -6857,12 +6872,17 @@ window.__ModuleLoader__.load({
           },
         }),
         h(
+          "p",
+          { className: "qqb-help" },
+          "触发条件：每 N 轮回复，或这段会话新增 ≥「至少新消息」条群消息（取较先满足的），两次提炼至少间隔「最短间隔」分钟。",
+        ),
+        h(
           "div",
           { className: "qqb-grid-2" },
           h(NumberField, {
             label: "每 N 轮提炼一次",
-            help: "1-100，默认 10",
-            value: membersProfileCfg.everyRounds === undefined ? 10 : membersProfileCfg.everyRounds,
+            help: "1-100，默认 6",
+            value: membersProfileCfg.everyRounds === undefined ? 6 : membersProfileCfg.everyRounds,
             min: 1,
             max: 100,
             step: 1,
@@ -6872,8 +6892,8 @@ window.__ModuleLoader__.load({
           }),
           h(NumberField, {
             label: "单次最多更新",
-            help: "1-5，默认 2 位",
-            value: membersProfileCfg.maxMembers === undefined ? 2 : membersProfileCfg.maxMembers,
+            help: "1-5，默认 3 位（手动提炼最多 8 位）",
+            value: membersProfileCfg.maxMembers === undefined ? 3 : membersProfileCfg.maxMembers,
             min: 1,
             max: 5,
             step: 1,
@@ -6894,13 +6914,35 @@ window.__ModuleLoader__.load({
           }),
           h(NumberField, {
             label: "同一人间隔（小时）",
-            help: "0-720，默认 6；避免反复覆盖",
-            value: membersProfileCfg.perMemberHours === undefined ? 6 : membersProfileCfg.perMemberHours,
+            help: "0-720，默认 2；避免反复覆盖",
+            value: membersProfileCfg.perMemberHours === undefined ? 2 : membersProfileCfg.perMemberHours,
             min: 0,
             max: 720,
             step: 1,
             onChange: function (value) {
               patchMembersProfileExtract({ perMemberHours: value });
+            },
+          }),
+          h(NumberField, {
+            label: "至少新消息",
+            help: "0-200，默认 12；群聊活跃时不必等轮次",
+            value: membersProfileCfg.minNewMessages === undefined ? 12 : membersProfileCfg.minNewMessages,
+            min: 0,
+            max: 200,
+            step: 1,
+            onChange: function (value) {
+              patchMembersProfileExtract({ minNewMessages: value });
+            },
+          }),
+          h(NumberField, {
+            label: "最短间隔（分钟）",
+            help: "0-1440，默认 10；防止太频繁",
+            value: membersProfileCfg.minIntervalMinutes === undefined ? 10 : membersProfileCfg.minIntervalMinutes,
+            min: 0,
+            max: 1440,
+            step: 1,
+            onChange: function (value) {
+              patchMembersProfileExtract({ minIntervalMinutes: value });
             },
           }),
         ),
