@@ -5293,6 +5293,24 @@ window.__ModuleLoader__.load({
                 ? raw.body
                 : "",
         tags: Array.isArray(raw.tags) ? raw.tags.filter(function (value) { return typeof value === "string"; }) : [],
+        profile: (function () {
+          const profile = raw.profile && typeof raw.profile === "object" ? raw.profile : meta.profile && typeof meta.profile === "object" ? meta.profile : {};
+          const affinity = profile.affinity && typeof profile.affinity === "object" ? profile.affinity : {};
+          const listOf = function (value) {
+            return Array.isArray(value) ? value.filter(function (item) { return typeof item === "string" && item !== ""; }) : [];
+          };
+          const level = Number(affinity.level);
+          return {
+            nicknames: listOf(profile.nicknames),
+            personality: listOf(profile.personality),
+            deeds: listOf(profile.deeds),
+            affinity: {
+              level: Number.isFinite(level) ? Math.max(-2, Math.min(2, Math.round(level))) : 0,
+              note: typeof affinity.note === "string" ? affinity.note : "",
+            },
+          };
+        })(),
+        profileSource: typeof raw.profileSource === "string" ? raw.profileSource : typeof meta.profileSource === "string" ? meta.profileSource : "",
         importance: importanceOf(raw.importance),
         messageCount: messageCount,
         lastSeenAt: lastSeenAt,
@@ -6161,129 +6179,138 @@ window.__ModuleLoader__.load({
       }
 
       const tagList = tagRowsOf(tagSource);
-      const editorCard = editor
-        ? h(
-            Card,
-            {
-              title: editor.id === "" ? "新建知识条目" : "编辑知识条目",
-              hint: editorLoading ? "正在读取正文…" : "标题 + 正文 + 标签；作用域决定哪些会话能检索到它",
-            },
-            h(
-              "div",
-              { className: "qqb-grid-2" },
-              h(TextField, {
-                label: "标题",
-                value: editor.title,
-                placeholder: "一句话能看出这是什么知识",
-                onChange: function (value) {
-                  patchEditor({ title: value });
-                },
-              }),
-              h(ChoiceGroup, {
-                label: "作用域",
-                value: editor.scope,
-                options: [
-                  { value: "global", label: "全局" },
-                  { value: "group", label: "指定群" },
-                  { value: "c2c", label: "私聊" },
-                ],
-                onChange: function (value) {
-                  patchEditor({ scope: value });
-                },
-              }),
-            ),
-            editor.scope === "global"
-              ? null
-              : h(TextField, {
-                  label: "群号 / 会话 id",
-                  help: "作用域为指定群或私聊时填写；留空 = 暂不绑定具体会话",
-                  value: editor.groupId,
-                  mono: true,
-                  onChange: function (value) {
-                    patchEditor({ groupId: value });
-                  },
-                }),
-            h(AreaField, {
-              label: "正文",
-              rows: 8,
-              value: editor.body,
-              placeholder: "写清楚背景、结论与适用场景；检索会匹配标题与正文",
+      /** 知识条目编辑区（编辑已有条目时在列表行内展开；新建条目时在顶部卡片内）。 */
+      function renderKnowledgeEditorBody() {
+        if (!editor) return null;
+        return h(
+          "div",
+          { className: "qqb-accordion-body" },
+          editorLoading ? h("p", { className: "qqb-help" }, "正在读取正文…") : null,
+          h(
+            "div",
+            { className: "qqb-grid-2" },
+            h(TextField, {
+              label: "标题",
+              value: editor.title,
+              placeholder: "一句话能看出这是什么知识",
               onChange: function (value) {
-                patchEditor({ body: value });
+                patchEditor({ title: value });
               },
             }),
-            h(
-              "div",
-              { className: "qqb-grid-2" },
-              h(TextField, {
-                label: "标签",
-                help: "逗号分隔，例如：部署,踩坑",
-                value: editor.tagsText,
+            h(ChoiceGroup, {
+              label: "作用域",
+              value: editor.scope,
+              options: [
+                { value: "global", label: "全局" },
+                { value: "group", label: "指定群" },
+                { value: "c2c", label: "私聊" },
+              ],
+              onChange: function (value) {
+                patchEditor({ scope: value });
+              },
+            }),
+          ),
+          editor.scope === "global"
+            ? null
+            : h(TextField, {
+                label: "群号 / 会话 id",
+                help: "作用域为指定群或私聊时填写；留空 = 暂不绑定具体会话",
+                value: editor.groupId,
+                mono: true,
                 onChange: function (value) {
-                  patchEditor({ tagsText: value });
+                  patchEditor({ groupId: value });
                 },
               }),
-              h(ChoiceGroup, {
-                label: "重要度",
-                value: importanceOf(editor.importance),
-                options: [
-                  { value: 0, label: "普通" },
-                  { value: 1, label: "留意" },
-                  { value: 2, label: "重要" },
-                  { value: 3, label: "关键" },
-                ],
-                onChange: function (value) {
-                  patchEditor({ importance: value });
-                },
-              }),
-            ),
-            editorError ? h("p", { className: "qqb-note qqb-note--err" }, editorError) : null,
-            h(StatusLine, { status: status, dirty: false }),
-            h(
-              "div",
-              { className: "qqb-toolbar" },
-              h(
-                "button",
-                {
-                  type: "button",
-                  className: "qqb-btn qqb-btn--primary",
-                  disabled: (status && status.state === "saving") || (editor.id !== "" && editor.ready !== true),
-                  onClick: function () {
-                    saveEntry();
+          h(AreaField, {
+            label: "正文",
+            rows: 8,
+            value: editor.body,
+            placeholder: "写清楚背景、结论与适用场景；检索会匹配标题与正文",
+            onChange: function (value) {
+              patchEditor({ body: value });
+            },
+          }),
+          h(
+            "div",
+            { className: "qqb-grid-2" },
+            h(TextField, {
+              label: "标签",
+              help: "逗号分隔，例如：部署,踩坑",
+              value: editor.tagsText,
+              onChange: function (value) {
+                patchEditor({ tagsText: value });
+              },
+            }),
+            h(ChoiceGroup, {
+              label: "重要度",
+              value: importanceOf(editor.importance),
+              options: [
+                { value: 0, label: "普通" },
+                { value: 1, label: "留意" },
+                { value: 2, label: "重要" },
+                { value: 3, label: "关键" },
+              ],
+              onChange: function (value) {
+                patchEditor({ importance: value });
+              },
+            }),
+          ),
+          editorError ? h("p", { className: "qqb-note qqb-note--err" }, editorError) : null,
+          h(StatusLine, { status: status, dirty: false }),
+          h(
+            "div",
+            { className: "qqb-toolbar" },
+            h("button", { type: "button", className: "qqb-btn", onClick: closeEditor }, "取消"),
+            editor.id !== "" && editor.ready !== true && !editorLoading
+              ? h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "qqb-btn",
+                    onClick: function () {
+                      loadEntryBody(editor.id);
+                    },
                   },
+                  "重试读取",
+                )
+              : null,
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--primary",
+                disabled: (status && status.state === "saving") || (editor.id !== "" && editor.ready !== true),
+                onClick: function () {
+                  saveEntry();
                 },
-                "保存",
-              ),
-              editor.id !== "" && editor.ready !== true && !editorLoading
-                ? h(
-                    "button",
-                    {
-                      type: "button",
-                      className: "qqb-btn",
-                      onClick: function () {
-                        loadEntryBody(editor.id);
-                      },
-                    },
-                    "重试读取",
-                  )
-                : null,
-              h("button", { type: "button", className: "qqb-btn", onClick: closeEditor }, "关闭"),
-              editor.id === ""
-                ? null
-                : h(
-                    "button",
-                    {
-                      type: "button",
-                      className: "qqb-btn qqb-btn--danger",
-                      onClick: function () {
-                        removeEntry(editor);
-                      },
-                    },
-                    "删除",
-                  ),
+              },
+              "保存",
             ),
-          )
-        : null;
+            editor.id === ""
+              ? null
+              : h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "qqb-btn qqb-btn--danger",
+                    onClick: function () {
+                      removeEntry(editor);
+                    },
+                  },
+                  "删除",
+                ),
+          ),
+        );
+      }
+
+      const newEntryCard =
+        editor && editor.id === ""
+          ? h(
+              Card,
+              { title: "新建知识条目", hint: "标题 + 正文 + 标签；作用域决定哪些会话能检索到它" },
+              renderKnowledgeEditorBody(),
+            )
+          : null;
 
       const extractCard = h(
         Card,
@@ -6485,54 +6512,98 @@ window.__ModuleLoader__.load({
                   })
                   .join(" · ");
                 const active = editor !== null && editor.id === id;
+                const pending = entry.status === "pending";
                 return h(
                   "div",
-                  { className: "qqb-list-item qqb-list-item--stack", key: id },
+                  { className: "qqb-accordion" + (active ? " qqb-accordion--open" : ""), key: id },
                   h(
                     "div",
-                    { className: "qqb-list-main" },
+                    { className: "qqb-accordion-head" },
                     h(
                       "button",
                       {
                         type: "button",
-                        className: "qqb-file" + (active ? " qqb-file--active" : ""),
+                        className: "qqb-accordion-toggle",
+                        "aria-expanded": active,
                         onClick: function () {
-                          openEntry(item);
+                          if (active) {
+                            closeEditor();
+                          } else {
+                            openEntry(item);
+                          }
                         },
                       },
-                      title,
+                      h("span", { className: "qqb-accordion-title" }, title),
+                      pending ? h("span", { className: "qqb-badge qqb-badge--warn" }, "待确认") : null,
                     ),
                     h("span", { className: "qqb-list-meta" }, meta || "—"),
-                    tags.length > 0
+                    tags.length > 0 && !active
                       ? h(
                           "div",
                           { className: "qqb-chip-row" },
-                          tags.map(function (value) {
+                          tags.slice(0, 4).map(function (value) {
                             return h("span", { className: "qqb-tag", key: value }, "#" + value);
                           }),
                         )
                       : null,
+                    h(
+                      "div",
+                      { className: "qqb-toolbar" },
+                      pending
+                        ? h(
+                            "button",
+                            {
+                              type: "button",
+                              className: "qqb-btn qqb-btn--sm qqb-btn--primary",
+                              onClick: function () {
+                                void reviewEntry(item, true);
+                              },
+                            },
+                            "采纳",
+                          )
+                        : null,
+                      pending
+                        ? h(
+                            "button",
+                            {
+                              type: "button",
+                              className: "qqb-btn qqb-btn--sm",
+                              onClick: function () {
+                                void reviewEntry(item, false);
+                              },
+                            },
+                            "丢弃",
+                          )
+                        : null,
+                      h(
+                        "button",
+                        {
+                          type: "button",
+                          className: "qqb-btn qqb-btn--sm",
+                          onClick: function () {
+                            if (active) {
+                              closeEditor();
+                            } else {
+                              openEntry(item);
+                            }
+                          },
+                        },
+                        active ? "收起" : "编辑",
+                      ),
+                      h(
+                        "button",
+                        {
+                          type: "button",
+                          className: "qqb-btn qqb-btn--sm qqb-btn--danger",
+                          onClick: function () {
+                            removeEntry(entry);
+                          },
+                        },
+                        "删除",
+                      ),
+                    ),
                   ),
-                  entry.status === "pending"
-                    ? h("span", { className: "qqb-badge qqb-badge--warn" }, "待确认")
-                    : null,
-                  entry.status === "pending"
-                    ? h("button", { type: "button", className: "qqb-btn qqb-btn--sm qqb-btn--primary", onClick: function () { void reviewEntry(item, true); } }, "采纳")
-                    : null,
-                  entry.status === "pending"
-                    ? h("button", { type: "button", className: "qqb-btn qqb-btn--sm", onClick: function () { void reviewEntry(item, false); } }, "丢弃")
-                    : null,
-                  h(
-                    "button",
-                    {
-                      type: "button",
-                      className: "qqb-btn qqb-btn--sm",
-                      onClick: function () {
-                        openEntry(item);
-                      },
-                    },
-                    "编辑",
-                  ),
+                  active ? renderKnowledgeEditorBody() : null,
                 );
               }),
             )
@@ -6556,7 +6627,7 @@ window.__ModuleLoader__.load({
           : null,
       );
 
-      return h("div", { className: "qqb-page" }, editorCard, extractCard, listCard);
+      return h("div", { className: "qqb-page" }, newEntryCard, extractCard, listCard);
     }
 
     // ── 群友库页（widget: members） ───────────────────────────
@@ -6571,21 +6642,27 @@ window.__ModuleLoader__.load({
       const [groupId, setGroupId] = react.useState("");
       const [editor, setEditor] = react.useState(null);
       const [editorError, setEditorError] = react.useState("");
-      // 群友备注自动提炼（阶段二）
-      const membersAutoCfg = (function () {
+
+      // 群友画像提炼（结构化：称呼/性格/事迹/关系）
+      const membersProfileCfg = (function () {
         const snapshot = props && props.snapshot ? props.snapshot : null;
         const settings = snapshot && snapshot.settings ? snapshot.settings : null;
         const membersSection = settings && settings.members ? settings.members : null;
-        const value = membersSection && membersSection.autoExtract ? membersSection.autoExtract : null;
+        const value = membersSection && membersSection.profileExtract ? membersSection.profileExtract : null;
         return value && typeof value === "object" ? value : {};
       })();
-      const [membersAutoStatus, runMembersAutoSave] = useSaver(props.reload);
+      const [membersProfileStatus, runMembersProfileSave] = useSaver(props.reload);
+      const [membersExtracting, setMembersExtracting] = react.useState(false);
+      const [membersExtractNote, setMembersExtractNote] = react.useState("");
+      const [membersExtractError, setMembersExtractError] = react.useState("");
+      const [membersExtractTranscript, setMembersExtractTranscript] = react.useState("");
+      const [membersExtractStats, setMembersExtractStats] = react.useState(null);
 
-      function patchMembersAutoExtract(partial) {
-        const next = Object.assign({}, membersAutoCfg, partial || {});
-        void runMembersAutoSave(async function () {
-          await apiPost(API + "/settings", { patch: { members: { autoExtract: next } } });
-        }, "群友备注提炼设置已保存");
+      function patchMembersProfileExtract(partial) {
+        const next = Object.assign({}, membersProfileCfg, partial || {});
+        void runMembersProfileSave(async function () {
+          await apiPost(API + "/settings", { patch: { members: { profileExtract: next } } });
+        }, "群友画像提炼设置已保存");
       }
 
       const loadList = react.useCallback(async function () {
@@ -6617,6 +6694,44 @@ window.__ModuleLoader__.load({
         [loadList],
       );
 
+      const loadMembersExtractStats = react.useCallback(async function () {
+        try {
+          const data = await apiGet(API + "/members/extract/stats");
+          setMembersExtractStats(data && data.stats ? data.stats : null);
+        } catch (error) {
+          setMembersExtractStats(null);
+        }
+      }, []);
+      react.useEffect(
+        function () {
+          void loadMembersExtractStats();
+        },
+        [loadMembersExtractStats],
+      );
+
+      async function triggerMembersExtract() {
+        if (membersExtracting) return;
+        setMembersExtracting(true);
+        setMembersExtractError("");
+        setMembersExtractNote("");
+        try {
+          const result = await apiPost(API + "/members/extract", {
+            transcript: membersExtractTranscript.trim(),
+            groupId: groupId,
+          });
+          const updated = Array.isArray(result.updated) ? result.updated.length : 0;
+          const skipped = Array.isArray(result.skipped) ? result.skipped.length : 0;
+          setMembersExtractNote("提炼完成：更新 " + updated + " 位" + (skipped > 0 ? "，跳过 " + skipped + " 位" : ""));
+          setMembersExtractTranscript("");
+          await loadList();
+          await loadMembersExtractStats();
+        } catch (error) {
+          setMembersExtractError("提炼失败：" + msgOf(error));
+        } finally {
+          setMembersExtracting(false);
+        }
+      }
+
       function openMember(item) {
         const view = memberViewOf(item);
         if (view.id === "") return;
@@ -6625,6 +6740,11 @@ window.__ModuleLoader__.load({
           name: view.name,
           notes: view.notes,
           tagsText: view.tags.join(", "),
+          nicknamesText: view.profile.nicknames.join(", "),
+          personalityText: view.profile.personality.join("\n"),
+          deedsText: view.profile.deeds.join("\n"),
+          affinityLevel: view.profile.affinity.level,
+          affinityNote: view.profile.affinity.note,
           importance: view.importance,
           autoNotes: view.autoNotes,
         });
@@ -6640,6 +6760,17 @@ window.__ModuleLoader__.load({
         setEditor(function (prev) {
           return prev ? Object.assign({}, prev, partial) : prev;
         });
+      }
+
+      function textLines(text) {
+        return String(text || "")
+          .split(/[\n,，;；]+/)
+          .map(function (line) {
+            return line.trim();
+          })
+          .filter(function (line) {
+            return line !== "";
+          });
       }
 
       /** 把一条自动补充采纳进人工备注（正文），随后从待采纳列表移除。 */
@@ -6674,6 +6805,15 @@ window.__ModuleLoader__.load({
             tags: parseTags(editor.tagsText),
             notes: String(editor.notes || ""),
             importance: importanceOf(editor.importance),
+            profile: {
+              nicknames: textLines(editor.nicknamesText),
+              personality: textLines(editor.personalityText),
+              deeds: textLines(editor.deedsText),
+              affinity: {
+                level: Number(editor.affinityLevel) || 0,
+                note: String(editor.affinityNote || "").trim(),
+              },
+            },
           });
           setEditor(null);
         }, "群友资料已保存");
@@ -6703,48 +6843,108 @@ window.__ModuleLoader__.load({
       }
 
       const groupList = groupRowsOf(groupSource);
+      const affinityLabels = ["警惕", "不熟", "普通", "亲近", "很亲近"];
 
-      const autoCard = h(
+      const profileCard = h(
         Card,
-        { title: "自动提炼（群友备注）", hint: "每 N 轮从群聊补充长期备注；只补充，不覆盖人工备注" },
+        { title: "群友画像提炼", hint: "专用提示词从群聊提炼结构化画像（称呼/性格/事迹/关系）；有频率限制，信息量小" },
         h(Switch, {
-          label: "启用群友备注提炼",
-          help: "默认关闭；与知识自动提炼共用一次模型调用，手动触发在「知识库 → 自动提炼」里",
-          checked: membersAutoCfg.enabled === true,
+          label: "启用群友画像提炼",
+          help: "默认开启；每 N 轮后台跑一次，只更新已知群友，不改人工画像（只做补充）",
+          checked: membersProfileCfg.enabled !== false,
           onChange: function (value) {
-            patchMembersAutoExtract({ enabled: value });
+            patchMembersProfileExtract({ enabled: value });
           },
         }),
         h(
           "div",
           { className: "qqb-grid-2" },
           h(NumberField, {
-            label: "单次最多备注",
-            help: "1-10，默认 2",
-            value: membersAutoCfg.maxNotes === undefined ? 2 : membersAutoCfg.maxNotes,
+            label: "每 N 轮提炼一次",
+            help: "1-100，默认 10",
+            value: membersProfileCfg.everyRounds === undefined ? 10 : membersProfileCfg.everyRounds,
             min: 1,
-            max: 10,
+            max: 100,
             step: 1,
             onChange: function (value) {
-              patchMembersAutoExtract({ maxNotes: value });
+              patchMembersProfileExtract({ everyRounds: value });
+            },
+          }),
+          h(NumberField, {
+            label: "单次最多更新",
+            help: "1-5，默认 2 位",
+            value: membersProfileCfg.maxMembers === undefined ? 2 : membersProfileCfg.maxMembers,
+            min: 1,
+            max: 5,
+            step: 1,
+            onChange: function (value) {
+              patchMembersProfileExtract({ maxMembers: value });
             },
           }),
           h(NumberField, {
             label: "置信度阈值",
-            help: "0-1，默认 0.8；低于阈值不写入",
-            value: membersAutoCfg.minConfidence === undefined ? 0.8 : membersAutoCfg.minConfidence,
+            help: "0-1，默认 0.7",
+            value: membersProfileCfg.minConfidence === undefined ? 0.7 : membersProfileCfg.minConfidence,
             min: 0,
             max: 1,
             step: 0.05,
             onChange: function (value) {
-              patchMembersAutoExtract({ minConfidence: value });
+              patchMembersProfileExtract({ minConfidence: value });
+            },
+          }),
+          h(NumberField, {
+            label: "同一人间隔（小时）",
+            help: "0-720，默认 6；避免反复覆盖",
+            value: membersProfileCfg.perMemberHours === undefined ? 6 : membersProfileCfg.perMemberHours,
+            min: 0,
+            max: 720,
+            step: 1,
+            onChange: function (value) {
+              patchMembersProfileExtract({ perMemberHours: value });
             },
           }),
         ),
-        h(StatusLine, { status: membersAutoStatus, dirty: false }),
+        h(StatusLine, { status: membersProfileStatus, dirty: false }),
+        h(
+          "p",
+          { className: "qqb-help" },
+          membersExtractStats
+            ? ("上次提炼：" + (membersExtractStats.lastResult ? (membersExtractStats.lastResult.ok ? "成功，更新 " + (membersExtractStats.lastResult.updated || 0) + " 位" + (membersExtractStats.lastResult.candidates ? "（候选 " + membersExtractStats.lastResult.candidates + "）" : "") : "失败：" + (membersExtractStats.lastResult.error || "未知错误")) : "尚未提炼") + "（距下次自动触发还差 " + (membersExtractStats.roundsSinceExtract || 0) + " 轮）")
+            : "尚未提炼",
+        ),
+        h(
+          "div",
+          { className: "qqb-prompt-note" },
+          h("p", { className: "qqb-help" }, "立即提炼一次：可粘贴一段群聊文本试跑；留空则用当前会话最近消息。只更新已存在的群友。"),
+          h(AreaField, {
+            label: "群聊文本（可选）",
+            rows: 4,
+            value: membersExtractTranscript,
+            placeholder: "[阿岚 (A1B2C3D4E5F601)] 我周末都在线，喜欢原神",
+            onChange: setMembersExtractTranscript,
+          }),
+          membersExtractError ? h("p", { className: "qqb-note qqb-note--err" }, membersExtractError) : null,
+          membersExtractNote ? h("p", { className: "qqb-note" }, membersExtractNote) : null,
+          h(
+            "div",
+            { className: "qqb-toolbar" },
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--primary",
+                disabled: membersExtracting,
+                onClick: function () {
+                  void triggerMembersExtract();
+                },
+              },
+              membersExtracting ? "正在提炼…" : "立即提炼",
+            ),
+          ),
+        ),
       );
 
-      /** 展开后的编辑区（列表项内联渲染，editor 为当前展开的草稿）。 */
+      /** 展开后的结构化编辑区（列表项内联渲染，editor 为当前展开的草稿）。 */
       function renderMemberEditor() {
         if (!editor) return null;
         return h(
@@ -6762,6 +6962,18 @@ window.__ModuleLoader__.load({
               },
             }),
             h(TextField, {
+              label: "常见称呼",
+              help: "逗号分隔，别人怎么叫他/他怎么自称",
+              value: editor.nicknamesText,
+              onChange: function (value) {
+                patchEditor({ nicknamesText: value });
+              },
+            }),
+          ),
+          h(
+            "div",
+            { className: "qqb-grid-2" },
+            h(TextField, {
               label: "标签",
               help: "逗号分隔，例如：老群友,技术",
               value: editor.tagsText,
@@ -6769,10 +6981,52 @@ window.__ModuleLoader__.load({
                 patchEditor({ tagsText: value });
               },
             }),
+            h(ChoiceGroup, {
+              label: "关系 / 好感",
+              value: Number(editor.affinityLevel) || 0,
+              options: [
+                { value: -2, label: "警惕" },
+                { value: -1, label: "不熟" },
+                { value: 0, label: "普通" },
+                { value: 1, label: "亲近" },
+                { value: 2, label: "很亲近" },
+              ],
+              onChange: function (value) {
+                patchEditor({ affinityLevel: value });
+              },
+            }),
           ),
           h(AreaField, {
-            label: "备注",
-            rows: 5,
+            label: "性格",
+            rows: 3,
+            help: "一行一条，最多 4 条",
+            value: editor.personalityText,
+            placeholder: "直爽\n爱开玩笑",
+            onChange: function (value) {
+              patchEditor({ personalityText: value });
+            },
+          }),
+          h(AreaField, {
+            label: "做过的事",
+            rows: 4,
+            help: "一行一条，最多 6 条（提炼会自动追加并去重）",
+            value: editor.deedsText,
+            placeholder: "组织周六开黑\n画群表情包",
+            onChange: function (value) {
+              patchEditor({ deedsText: value });
+            },
+          }),
+          h(TextField, {
+            label: "关系备注",
+            help: "为什么是这个好感，比如：常一起打游戏",
+            value: editor.affinityNote,
+            onChange: function (value) {
+              patchEditor({ affinityNote: value });
+            },
+          }),
+          h(AreaField, {
+            label: "备注（自由文本）",
+            rows: 3,
             value: editor.notes,
             placeholder: "性格、偏好、约定、不要提的话题…",
             onChange: function (value) {
@@ -6828,6 +7082,7 @@ window.__ModuleLoader__.load({
             kvRow("发言数", editor.view.messageCount),
             kvRow("最近活跃", editor.view.lastSeenAt > 0 ? formatTime(editor.view.lastSeenAt) : "—"),
             kvRow("所在群", editor.view.groupRows.length === 0 ? "—" : editor.view.groupRows.length + " 个"),
+            kvRow("画像来源", editor.view.profileSource === "manual" ? "人工编辑" : editor.view.profileSource === "auto" ? "自动提炼" : "—"),
             editor.view.aliases.length > 0 ? kvRow("别名", editor.view.aliases.join(" / ")) : null,
           ),
           editor.view.groupRows.length > 0
@@ -6882,7 +7137,7 @@ window.__ModuleLoader__.load({
             className: "qqb-input",
             style: { maxWidth: 240 },
             type: "search",
-            placeholder: "搜索昵称 / 备注 / openid（回车）",
+            placeholder: "搜索昵称 / 称呼 / 性格 / 事迹（回车）",
             value: q,
             spellCheck: false,
             onChange: function (event) {
@@ -6910,7 +7165,7 @@ window.__ModuleLoader__.load({
             "select",
             {
               className: "qqb-select",
-              style: { width: "auto", maxWidth: 200 },
+              style: { width: "auto", maxWidth: 180 },
               value: groupId,
               "aria-label": "按群筛选",
               onChange: function (event) {
@@ -6919,11 +7174,7 @@ window.__ModuleLoader__.load({
             },
             h("option", { value: "" }, "全部群"),
             groupList.map(function (row) {
-              return h(
-                "option",
-                { key: row.id, value: row.id },
-                (row.name || shortCode(row.id, 8)) + (row.count > 0 ? "（" + row.count + "）" : ""),
-              );
+              return h("option", { key: row.id, value: row.id }, (row.name || shortCode(row.id, 8)) + (row.count > 0 ? "（" + row.count + "）" : ""));
             }),
           ),
           h(
@@ -6965,6 +7216,16 @@ window.__ModuleLoader__.load({
                 const view = memberViewOf(item);
                 const id = view.id !== "" ? view.id : "member-" + index;
                 const label = view.name !== "" ? view.name : "openid " + shortCode(view.openid, 6);
+                const profile = view.profile;
+                const profileBits = [
+                  profile.nicknames.length > 0 ? "称呼 " + profile.nicknames.slice(0, 3).join("、") : "",
+                  profile.personality.length > 0 ? "性格 " + profile.personality.slice(0, 2).join("、") : "",
+                  profile.affinity.level !== 0 ? "关系 " + affinityLabels[profile.affinity.level + 2] : "",
+                ]
+                  .filter(function (part) {
+                    return part !== "";
+                  })
+                  .join(" · ");
                 const meta = [
                   view.openid !== "" ? "openid " + shortCode(view.openid, 6) : "",
                   view.groupRows.length > 0 ? view.groupRows.length + " 个群" : "",
@@ -6976,10 +7237,11 @@ window.__ModuleLoader__.load({
                   })
                   .join(" · ");
                 const active = editor !== null && editor.view.id === id;
+                const hasProfile = profile.nicknames.length > 0 || profile.personality.length > 0 || profile.deeds.length > 0;
                 const hasAuto = view.autoNotes.length > 0;
                 const dotClass =
                   "qqb-accordion-dot" +
-                  (view.notes.trim() !== "" ? " qqb-accordion-dot--ok" : hasAuto ? " qqb-accordion-dot--warn" : "");
+                  (hasProfile || view.notes.trim() !== "" ? " qqb-accordion-dot--ok" : hasAuto ? " qqb-accordion-dot--warn" : "");
                 return h(
                   "div",
                   { className: "qqb-accordion" + (active ? " qqb-accordion--open" : ""), key: id },
@@ -7000,7 +7262,7 @@ window.__ModuleLoader__.load({
                       h("span", { className: "qqb-accordion-title" }, label),
                       hasAuto && !active ? h("span", { className: "qqb-badge qqb-badge--warn" }, "自动补充 " + view.autoNotes.length) : null,
                     ),
-                    h("span", { className: "qqb-list-meta" }, meta || "—"),
+                    h("span", { className: "qqb-list-meta" }, active ? meta || "—" : [meta, profileBits].filter(function (part) { return part !== ""; }).join(" · ") || "—"),
                     view.tags.length > 0 && !active
                       ? h(
                           "div",
@@ -7044,7 +7306,7 @@ window.__ModuleLoader__.load({
           : null,
       );
 
-      return h("div", { className: "qqb-page" }, autoCard, listCard);
+      return h("div", { className: "qqb-page" }, profileCard, listCard);
     }
 
     // ── 设置页 Section 主体（工作区导航） ──────────────────────

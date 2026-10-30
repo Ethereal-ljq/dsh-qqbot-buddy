@@ -1037,3 +1037,30 @@ createStickerStore({ settings, logger }) => {
   - 幂等：marker `<stateDir>/memory-backfill-v1.json`，存在即跳过。
 - runtime 在 members 初始化后调用一次（失败只 warn，不影响启动）。
 - 背景：旧版本没有群友库，升级后成员条目只有名字没有备注，本次补齐历史信息；新增事实仍由自动提炼/工具维护。
+
+# v0.19.0（2026-10-30）：群友画像结构化 + 专用提炼 + 提及懒加载；知识库行内编辑
+
+## 成员画像（meta.profile）
+- 结构：`{ nicknames[≤8], personality[≤4], deeds[≤6], affinity:{level:-2..2, note≤60} }`；
+  `meta.profileSource = manual|auto`、`meta.profileUpdatedAt`。
+- 写入：
+  - 人工：`members.save({ profile })` 整体替换，标记 manual；
+  - 自动：`members.updateProfile(id,{profile,tags,source:'auto'})` 并集去重限长；manual 也允许并集补充但不删除。
+- 展示/检索：`toItem().profile`；list/recall 的匹配文本包含画像摘要（`profileText`）。
+
+## 画像提炼（lib/members/profile-extract.js）
+- 独立 prompt，输出 `{members:[{openid,name,nicknames,personality,deeds,affinity,tags,confidence}]}`。
+- 候选懒加载：只把 transcript 里出现过的已知群友放进 prompt（最多 12 个候选）；
+  模型输出按 openid 优先 / 昵称别名精确匹配回成员，未知 openid 跳过。
+- 频率：settings.members.profileExtract（enabled 默认 true / everyRounds 10 / maxMembers 2 /
+  minConfidence 0.7 / perMemberHours 6）；gateway turn/end 计数触发，后台执行、失败只记日志。
+- API：POST /members/extract、GET /members/extract/stats。
+
+## 提示词懒加载（lib/members/mention.js + context/emergence.js）
+- `resolveMentionedMembers(text, items)`：最长别名匹配，返回被提到的成员；
+- `memberPromptLine(item)`：一行画像（称呼/性格/事迹/关系/当前发言人）；
+- recall 群友块顺序：发言人 → 被提到的人 → 文本相关召回，条数上限 members.maxPerTurn。
+
+## 知识库编辑
+- KnowledgePage 改为行内手风琴：编辑已有条目在行内展开（newEntryCard 仅用于新建），
+  取消/保存/删除在展开区内；与 MembersPage 同一套 .qqb-accordion 样式。
