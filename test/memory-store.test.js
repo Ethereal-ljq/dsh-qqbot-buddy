@@ -312,3 +312,16 @@ test('没有配置 dir 时回退到 cwd/memory', (t) => {
   const store = createMemoryStore({ settings: { get: () => ({ memory: {} }) }, logger: QUIET_LOGGER });
   assert.equal(store.root(), path.join(dir, 'memory'));
 });
+
+test('saveFact 近似重复：换措辞/补标点不重复写文件', (t) => {
+  const { store } = makeStore(t);
+  const first = store.saveFact({ text: '表情包「鲸鱼晃尾巴.gif」的用途：群里有人让发尾巴时，就发这张' });
+  assert.equal(first.duplicate, false);
+  const second = store.saveFact({ text: '表情包「鲸鱼晃尾巴.gif」：群里有人让发尾巴时就发这张，跟椅子没关系。', tags: ['约定'] });
+  assert.equal(second.duplicate, true, '近似重复应合并');
+  assert.equal(store.index().facts.length, 1);
+  // 语义不同的不合并
+  const third = store.saveFact({ text: '浮沉本人要求喊他「宝宝」' });
+  assert.equal(third.duplicate, false);
+  assert.equal(store.index().facts.length, 2);
+});

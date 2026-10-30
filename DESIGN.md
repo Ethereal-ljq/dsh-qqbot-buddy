@@ -1076,3 +1076,12 @@ createStickerStore({ settings, logger }) => {
   默认 everyRounds 6、maxMembers 3、perMemberHours 2h、minNewMessages 12、minIntervalMinutes 10。
 - 手动提炼（API 带 transcript 或 UI「立即提炼」）：maxRows = min(8, max(maxMembers, candidates))；
   API 返回 candidates 名单，UI 展示候选/跳过原因。
+
+# v0.19.2（2026-10-30）：memory_save 近似去重 + 内部 ID 拒绝
+
+- `lib/memory/store.js` saveFact：
+  - 精确 hash 未命中后，取最近 `NEAR_DUP_SCAN=300` 条事实做近似判断；
+  - `normalizeForSimilarity`（NFKC/小写/去标点空白）+ 2-gram Jaccard ≥0.62，或包含关系且长度比 ≥0.55，视为重复；
+  - 命中即走原有 duplicate 分支：hits+1、tags 合并、importance 提升，不再写文件。
+- `lib/tools/memory-tools.js` memory_save：拒绝 `k_*/m_*` 内部条目 ID，报错提示写事实本身。
+- 单测：新增近似重复合并（换措辞/加标点）与内部 ID 拒绝用例。
