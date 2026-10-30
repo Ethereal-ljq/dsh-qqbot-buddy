@@ -184,3 +184,26 @@ test('模型没返回 affinity 时，不清空已有关系', async () => {
   assert.equal(after.meta.profile.affinity.note, '老朋友');
   assert.deepEqual(after.meta.profile.personality, ['直爽']);
 });
+
+test('手动提炼留空：退回最近一次会话的消息（record=null 也能用）', async () => {
+  const { store, settings } = makeEnv({ perMemberHours: 0, everyRounds: 100 });
+  store.visit({ groupId: 'g1', openid: 'U1', name: '阿岚' });
+  const extractor = makeExtractor({ store, settings, reply: REPLY });
+  const record = {
+    scope: 'group',
+    peerId: 'g1',
+    session: {
+      events: [
+        { type: 'user/message', message: { content: [{ type: 'text', text: '[阿岚 (U1)] 我周末都在线，喜欢原神' }] } },
+        { type: 'assistant/message', message: { content: [{ type: 'text', text: '好的' }] } },
+        { type: 'user/message', message: { content: [{ type: 'text', text: '[阿岚 (U1)] 我常组织周六开黑' }] } },
+        { type: 'assistant/message', message: { content: [{ type: 'text', text: '收到' }] } },
+      ],
+    },
+  };
+  extractor.noteTurnEnd(record); // everyRounds=100，不会自动提炼，只记住 lastRecord
+  const result = await extractor.extractNow(null, { groupId: 'g1' });
+  assert.equal(result.ok, true);
+  assert.equal(result.scannedMessages, 4);
+  assert.equal(result.updated.length, 1);
+});

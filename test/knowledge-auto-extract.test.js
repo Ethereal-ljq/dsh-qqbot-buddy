@@ -171,3 +171,42 @@ test('群聊提炼带 groupId，私聊落 c2c 作用域', async () => {
   assert.equal(entry.groupName, '读书会');
   assert.equal(entry.source, 'auto');
 });
+
+test('知识提炼手动留空：退回最近一次会话的消息', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qqb-ke-'));
+  const settings = {
+    get: () => ({
+      knowledge: {
+        enabled: true,
+        dir: path.join(dir, 'k'),
+        autoExtract: { enabled: true, everyRounds: 100, maxEntries: 3, minConfidence: 0.8, provider: 'p', model: 'm' },
+      },
+    }),
+  };
+  const knowledge = createKnowledgeStore({ settings, logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  knowledge.ensure();
+  const extractor = createKnowledgeExtractor({
+    ctx: null,
+    settings,
+    knowledge,
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    callModel: async () => JSON.stringify({ knowledge: [{ title: '周六开黑', body: '每周六晚八点开黑', confidence: 0.95 }] }),
+  });
+  const record = {
+    scope: 'group',
+    peerId: 'g1',
+    session: {
+      events: [
+        { type: 'user/message', message: { content: [{ type: 'text', text: '[阿岚 (U1)] 每周六晚八点开黑' }] } },
+        { type: 'assistant/message', message: { content: [{ type: 'text', text: '好的' }] } },
+        { type: 'user/message', message: { content: [{ type: 'text', text: '[老周 (U2)] 收到' }] } },
+        { type: 'assistant/message', message: { content: [{ type: 'text', text: '嗯' }] } },
+      ],
+    },
+  };
+  extractor.noteTurnEnd(record);
+  const result = await extractor.extractNow(null, { groupHint: '读书会' });
+  assert.equal(result.ok, true);
+  assert.equal(result.scannedMessages, 4);
+  assert.equal(knowledge.list({}).total, 1);
+});

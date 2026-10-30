@@ -1085,3 +1085,11 @@ createStickerStore({ settings, logger }) => {
   - 命中即走原有 duplicate 分支：hits+1、tags 合并、importance 提升，不再写文件。
 - `lib/tools/memory-tools.js` memory_save：拒绝 `k_*/m_*` 内部条目 ID，报错提示写事实本身。
 - 单测：新增近似重复合并（换措辞/加标点）与内部 ID 拒绝用例。
+
+# v0.19.3（2026-10-30）：手动提炼回退最近会话
+
+- 根因：UI「立即提炼」留空时 /members/extract 与 /knowledge/extract 传 record=null，
+  runExtract 用 getEvents(null) 拿到空数组 → 永远「没有可提炼的消息」。
+- 修复：profile-extract 与 knowledge/auto-extract 的 runExtract 在 transcript 为空时使用
+  `record || lastRecord`（noteTurnEnd 缓存的最近一次会话 record）。
+- 单测：两个提炼器各加「record=null 手动提炼回退最近会话」用例。
