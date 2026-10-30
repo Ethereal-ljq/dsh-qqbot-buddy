@@ -351,6 +351,15 @@ window.__ModuleLoader__.load({
       ".qqb-list { display: flex; flex-direction: column; }",
       ".qqb-list-item { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--dsw-alias-border-l2, #e5e7eb); }",
       ".qqb-list-item:last-child { border-bottom: none; }",
+      ".qqb-accordion { border: 1px solid var(--dsw-alias-border-l2, #e5e7eb); border-radius: 8px; margin-bottom: 8px; }",
+      ".qqb-accordion:last-child { margin-bottom: 0; }",
+      ".qqb-accordion-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; flex-wrap: wrap; }",
+      ".qqb-accordion-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 120px; background: none; border: none; padding: 0; cursor: pointer; color: inherit; font: inherit; text-align: left; }",
+      ".qqb-accordion-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dsw-alias-label-tertiary, #8b93a1); flex: none; }",
+      ".qqb-accordion-dot--ok { background: #16a34a; }",
+      ".qqb-accordion-dot--warn { background: #d97706; }",
+      ".qqb-accordion-title { font-size: 13px; line-height: 20px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
+      ".qqb-accordion-body { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-top: 1px solid var(--dsw-alias-border-l2, #e5e7eb); }",
       ".qqb-list-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }",
       ".qqb-list-meta { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary, #8b93a1); }",
       ".qqb-file { font: inherit; font-size: 13px; padding: 3px 0; border: none; background: transparent; color: inherit; cursor: pointer; text-align: left; }",
@@ -6670,13 +6679,26 @@ window.__ModuleLoader__.load({
         }, "群友资料已保存");
       }
 
-      function removeMember() {
-        if (!editor || editor.view.id === "") return;
-        if (typeof window !== "undefined" && !window.confirm("确定删除该群友条目吗？此操作不可撤销。")) return;
-        const id = editor.view.id;
+      /** 手风琴开合：同一时间只展开一个成员（再点一次收起）。 */
+      function toggleMember(item) {
+        const view = memberViewOf(item);
+        if (view.id === "") return;
+        if (editor && editor.view.id === view.id) {
+          closeEditor();
+          return;
+        }
+        openMember(item);
+      }
+
+      function removeMember(id, label) {
+        const targetId = typeof id === "string" && id !== "" ? id : editor && editor.view.id ? editor.view.id : "";
+        if (targetId === "") return;
+        if (typeof window !== "undefined" && !window.confirm("确定删除群友「" + (label || "该条目") + "」吗？此操作不可撤销。")) return;
         void run(async function () {
-          await apiPost(API + "/members/delete", { id: id });
-          setEditor(null);
+          await apiPost(API + "/members/delete", { id: targetId });
+          setEditor(function (prev) {
+            return prev && prev.view.id === targetId ? null : prev;
+          });
         }, "群友条目已删除");
       }
 
@@ -6722,139 +6744,133 @@ window.__ModuleLoader__.load({
         h(StatusLine, { status: membersAutoStatus, dirty: false }),
       );
 
-      const editorCard = editor
-        ? h(
-            Card,
-            {
-              title: "群友详情",
-              hint: editor.view.openid !== "" ? "openid " + editor.view.openid : shortCode(editor.view.id, 12),
+      /** 展开后的编辑区（列表项内联渲染，editor 为当前展开的草稿）。 */
+      function renderMemberEditor() {
+        if (!editor) return null;
+        return h(
+          "div",
+          { className: "qqb-accordion-body" },
+          h(
+            "div",
+            { className: "qqb-grid-2" },
+            h(TextField, {
+              label: "昵称",
+              value: editor.name,
+              placeholder: "群里显示的名字（可自定义备注名）",
+              onChange: function (value) {
+                patchEditor({ name: value });
+              },
+            }),
+            h(TextField, {
+              label: "标签",
+              help: "逗号分隔，例如：老群友,技术",
+              value: editor.tagsText,
+              onChange: function (value) {
+                patchEditor({ tagsText: value });
+              },
+            }),
+          ),
+          h(AreaField, {
+            label: "备注",
+            rows: 5,
+            value: editor.notes,
+            placeholder: "性格、偏好、约定、不要提的话题…",
+            onChange: function (value) {
+              patchEditor({ notes: value });
             },
-            h(
-              "div",
-              { className: "qqb-grid-2" },
-              h(TextField, {
-                label: "昵称",
-                value: editor.name,
-                placeholder: "群里显示的名字（可自定义备注名）",
-                onChange: function (value) {
-                  patchEditor({ name: value });
-                },
-              }),
-              h(TextField, {
-                label: "标签",
-                help: "逗号分隔，例如：老群友,技术",
-                value: editor.tagsText,
-                onChange: function (value) {
-                  patchEditor({ tagsText: value });
-                },
-              }),
-            ),
-            h(AreaField, {
-              label: "备注",
-              rows: 5,
-              value: editor.notes,
-              placeholder: "性格、偏好、约定、不要提的话题…",
-              onChange: function (value) {
-                patchEditor({ notes: value });
-              },
-            }),
-            Array.isArray(editor.autoNotes) && editor.autoNotes.length > 0
-              ? h(
-                  "div",
-                  { className: "qqb-prompt-note" },
-                  h("p", { className: "qqb-help" }, "自动补充（不会覆盖人工备注，可一键采纳）："),
-                  editor.autoNotes.map(function (note, index) {
-                    return h(
-                      "div",
-                      { className: "qqb-toolbar", key: "auto-note-" + index },
-                      h(
-                        "span",
-                        { className: "qqb-help" },
-                        note.text + (note.confidence > 0 ? "（置信度 " + Math.round(note.confidence * 100) + "%）" : ""),
-                      ),
-                      h(
-                        "button",
-                        {
-                          type: "button",
-                          className: "qqb-btn qqb-btn--sm",
-                          onClick: function () {
-                            adoptAutoNote(index);
-                          },
-                        },
-                        "采纳到备注",
-                      ),
-                    );
-                  }),
-                )
-              : null,
-            h(ChoiceGroup, {
-              label: "重要度",
-              value: importanceOf(editor.importance),
-              options: [
-                { value: 0, label: "普通" },
-                { value: 1, label: "留意" },
-                { value: 2, label: "重要" },
-                { value: 3, label: "关键" },
-              ],
-              onChange: function (value) {
-                patchEditor({ importance: value });
-              },
-            }),
-            h(
-              "div",
-              { className: "qqb-kv" },
-              kvRow("openid", editor.view.openid || "—"),
-              kvRow("发言数", editor.view.messageCount),
-              kvRow("最近活跃", editor.view.lastSeenAt > 0 ? formatTime(editor.view.lastSeenAt) : "—"),
-              kvRow("所在群", editor.view.groupRows.length === 0 ? "—" : editor.view.groupRows.length + " 个"),
-              editor.view.aliases.length > 0 ? kvRow("别名", editor.view.aliases.join(" / ")) : null,
-            ),
-            editor.view.groupRows.length > 0
-              ? h(
-                  "div",
-                  { className: "qqb-chip-row" },
-                  editor.view.groupRows.map(function (row) {
-                    return h(
+          }),
+          Array.isArray(editor.autoNotes) && editor.autoNotes.length > 0
+            ? h(
+                "div",
+                { className: "qqb-prompt-note" },
+                h("p", { className: "qqb-help" }, "自动补充（不会覆盖人工备注，可一键采纳）："),
+                editor.autoNotes.map(function (note, index) {
+                  return h(
+                    "div",
+                    { className: "qqb-toolbar", key: "auto-note-" + index },
+                    h(
                       "span",
-                      { className: "qqb-chip", key: row.id },
-                      h("span", { className: "qqb-chip-label" }, row.name || shortCode(row.id, 8)),
-                      row.count > 0 ? h("span", { className: "qqb-chip-meta" }, row.count + " 条") : null,
-                    );
-                  }),
-                )
-              : null,
-            editorError ? h("p", { className: "qqb-note qqb-note--err" }, editorError) : null,
-            h(StatusLine, { status: status, dirty: false }),
+                      { className: "qqb-help" },
+                      note.text + (note.confidence > 0 ? "（置信度 " + Math.round(note.confidence * 100) + "%）" : ""),
+                    ),
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        className: "qqb-btn qqb-btn--sm",
+                        onClick: function () {
+                          adoptAutoNote(index);
+                        },
+                      },
+                      "采纳到备注",
+                    ),
+                  );
+                }),
+              )
+            : null,
+          h(ChoiceGroup, {
+            label: "重要度",
+            value: importanceOf(editor.importance),
+            options: [
+              { value: 0, label: "普通" },
+              { value: 1, label: "留意" },
+              { value: 2, label: "重要" },
+              { value: 3, label: "关键" },
+            ],
+            onChange: function (value) {
+              patchEditor({ importance: value });
+            },
+          }),
+          h(
+            "div",
+            { className: "qqb-kv" },
+            kvRow("openid", editor.view.openid || "—"),
+            kvRow("发言数", editor.view.messageCount),
+            kvRow("最近活跃", editor.view.lastSeenAt > 0 ? formatTime(editor.view.lastSeenAt) : "—"),
+            kvRow("所在群", editor.view.groupRows.length === 0 ? "—" : editor.view.groupRows.length + " 个"),
+            editor.view.aliases.length > 0 ? kvRow("别名", editor.view.aliases.join(" / ")) : null,
+          ),
+          editor.view.groupRows.length > 0
+            ? h(
+                "div",
+                { className: "qqb-chip-row" },
+                editor.view.groupRows.map(function (row) {
+                  return h("span", { className: "qqb-chip", key: row.id }, (row.name || shortCode(row.id, 8)) + (row.count > 0 ? " · " + row.count : ""));
+                }),
+              )
+            : null,
+          editorError ? h("p", { className: "qqb-note qqb-note--err" }, editorError) : null,
+          h(StatusLine, { status: status, dirty: false }),
+          h(
+            "div",
+            { className: "qqb-toolbar" },
+            h("button", { type: "button", className: "qqb-btn", onClick: closeEditor }, "取消"),
             h(
-              "div",
-              { className: "qqb-toolbar" },
-              h(
-                "button",
-                {
-                  type: "button",
-                  className: "qqb-btn qqb-btn--primary",
-                  disabled: status && status.state === "saving",
-                  onClick: function () {
-                    saveMember();
-                  },
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--primary",
+                disabled: status && status.state === "saving",
+                onClick: function () {
+                  saveMember();
                 },
-                "保存",
-              ),
-              h("button", { type: "button", className: "qqb-btn", onClick: closeEditor }, "关闭"),
-              h(
-                "button",
-                {
-                  type: "button",
-                  className: "qqb-btn qqb-btn--danger",
-                  onClick: function () {
-                    removeMember();
-                  },
-                },
-                "删除",
-              ),
+              },
+              "保存",
             ),
-          )
-        : null;
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--danger",
+                onClick: function () {
+                  removeMember(editor.view.id, editor.view.name);
+                },
+              },
+              "删除",
+            ),
+          ),
+        );
+      }
 
       const listCard = h(
         Card,
@@ -6960,52 +6976,75 @@ window.__ModuleLoader__.load({
                   })
                   .join(" · ");
                 const active = editor !== null && editor.view.id === id;
+                const hasAuto = view.autoNotes.length > 0;
+                const dotClass =
+                  "qqb-accordion-dot" +
+                  (view.notes.trim() !== "" ? " qqb-accordion-dot--ok" : hasAuto ? " qqb-accordion-dot--warn" : "");
                 return h(
                   "div",
-                  { className: "qqb-list-item qqb-list-item--stack", key: id },
+                  { className: "qqb-accordion" + (active ? " qqb-accordion--open" : ""), key: id },
                   h(
                     "div",
-                    { className: "qqb-list-main" },
+                    { className: "qqb-accordion-head" },
                     h(
                       "button",
                       {
                         type: "button",
-                        className: "qqb-file" + (active ? " qqb-file--active" : ""),
+                        className: "qqb-accordion-toggle",
+                        "aria-expanded": active,
                         onClick: function () {
-                          openMember(item);
+                          toggleMember(item);
                         },
                       },
-                      label,
+                      h("span", { className: dotClass }),
+                      h("span", { className: "qqb-accordion-title" }, label),
+                      hasAuto && !active ? h("span", { className: "qqb-badge qqb-badge--warn" }, "自动补充 " + view.autoNotes.length) : null,
                     ),
                     h("span", { className: "qqb-list-meta" }, meta || "—"),
-                    view.tags.length > 0
+                    view.tags.length > 0 && !active
                       ? h(
                           "div",
                           { className: "qqb-chip-row" },
-                          view.tags.map(function (value) {
+                          view.tags.slice(0, 4).map(function (value) {
                             return h("span", { className: "qqb-tag", key: value }, "#" + value);
                           }),
                         )
                       : null,
+                    h(
+                      "div",
+                      { className: "qqb-toolbar" },
+                      h(
+                        "button",
+                        {
+                          type: "button",
+                          className: "qqb-btn qqb-btn--sm",
+                          onClick: function () {
+                            toggleMember(item);
+                          },
+                        },
+                        active ? "收起" : "编辑",
+                      ),
+                      h(
+                        "button",
+                        {
+                          type: "button",
+                          className: "qqb-btn qqb-btn--sm qqb-btn--danger",
+                          onClick: function () {
+                            removeMember(view.id, label);
+                          },
+                        },
+                        "删除",
+                      ),
+                    ),
                   ),
-                  h(
-                    "button",
-                    {
-                      type: "button",
-                      className: "qqb-btn qqb-btn--sm",
-                      onClick: function () {
-                        openMember(item);
-                      },
-                    },
-                    "详情",
-                  ),
+                  active ? renderMemberEditor() : null,
                 );
               }),
             )
           : null,
       );
 
-      return h("div", { className: "qqb-page" }, editorCard, autoCard, listCard);
+      return h("div", { className: "qqb-page" }, autoCard, listCard);
     }
 
     // ── 设置页 Section 主体（工作区导航） ──────────────────────

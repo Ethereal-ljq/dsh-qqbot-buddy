@@ -1020,3 +1020,11 @@ createStickerStore({ settings, logger }) => {
 - API：`POST /members/adopt`；`POST /knowledge/extract` 返回 `membersUpdated/membersSkipped`。
 - UI：群友库页新增「自动提炼（群友备注）」卡片；详情页显示「自动补充」列表 + 「采纳到备注」按钮；
   知识库提炼完成提示展示群友备注条数。
+# v0.18.1（2026-10-30）：群友库手风琴式编辑（纯前端）
+
+- MembersPage 从「顶部独立详情卡 + 列表」改为「列表项原地展开」：
+  - 行头：状态点 + 昵称 + 摘要（openid/群数/发言/最近活跃）+ 可选标签 + 编辑/删除；
+  - 展开：昵称、标签、备注、自动补充（含采纳）、重要度、openid/发言数/群列表，底部取消/保存/删除；
+  - 同一时间只展开一位（accordion），保存/取消即收起；删除支持从行内直接删。
+- 新增样式 `.qqb-accordion*`（沿用现有 qqb 设计变量，无新增依赖）。
+- API 与数据结构不变（/members/save、/members/adopt、/members/delete）。
