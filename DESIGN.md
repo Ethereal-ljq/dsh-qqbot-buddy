@@ -1093,3 +1093,12 @@ createStickerStore({ settings, logger }) => {
 - 修复：profile-extract 与 knowledge/auto-extract 的 runExtract 在 transcript 为空时使用
   `record || lastRecord`（noteTurnEnd 缓存的最近一次会话 record）。
 - 单测：两个提炼器各加「record=null 手动提炼回退最近会话」用例。
+
+# v0.20.0（2026-10-30）：提炼提示词 UI 化（可见/可改/可预览）
+
+- settings：members.profileExtract.prompt、knowledge.autoExtract.prompt（字符串，≤8000，空=内置模板）。
+- extractor：导出 PROFILE_PROMPT_TEMPLATE / KNOWLEDGE_PROMPT_TEMPLATE；buildPrompt 支持覆盖模板并替换占位符；
+  stats() 返回 {default, override, resolved, placeholders}。
+- routes：/members/extract/stats、/knowledge/extract/stats 原样透出 prompt 信息。
+- UI：两个提炼卡片增加「自定义提示词」textarea + 保存/恢复默认/查看内置模板（pre 预览）；占位符说明。
+- 0.19.3 起 record=null 手动提炼回退 lastRecord / manager.latestRecord()；本次 UI 提示词让行为可观察可调。

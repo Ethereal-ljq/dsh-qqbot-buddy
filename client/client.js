@@ -5968,6 +5968,9 @@ window.__ModuleLoader__.load({
       const [extractTranscript, setExtractTranscript] = react.useState("");
       const [extractScope, setExtractScope] = react.useState("global");
       const [extractGroupId, setExtractGroupId] = react.useState("");
+      const [knowledgePromptText, setKnowledgePromptText] = react.useState("");
+      const [knowledgePromptDefault, setKnowledgePromptDefault] = react.useState("");
+      const [knowledgePromptPreview, setKnowledgePromptPreview] = react.useState(false);
 
       const loadList = react.useCallback(async function () {
         setLoading(true);
@@ -6113,7 +6116,12 @@ window.__ModuleLoader__.load({
       const loadExtractStats = react.useCallback(async function () {
         try {
           const data = await apiGet(API + "/knowledge/extract/stats");
-          setExtractStats(data && data.stats ? data.stats : null);
+          const stats = data && data.stats ? data.stats : null;
+          setExtractStats(stats);
+          if (stats && stats.prompt) {
+            setKnowledgePromptText(typeof stats.prompt.override === "string" ? stats.prompt.override : "");
+            setKnowledgePromptDefault(typeof stats.prompt.default === "string" ? stats.prompt.default : "");
+          }
         } catch (error) {
           setExtractStats(null);
         }
@@ -6360,6 +6368,60 @@ window.__ModuleLoader__.load({
             { className: "qqb-toolbar" },
             h("button", { type: "button", className: "qqb-btn qqb-btn--primary", disabled: extracting, onClick: function () { void triggerExtract(); } }, extracting ? "正在提炼…" : "立即提炼"),
           ),
+        ),
+        h(
+          "div",
+          { className: "qqb-prompt-note" },
+          h("p", { className: "qqb-help" }, "提炼提示词（留空 = 使用内置模板；支持 {{maxEntries}} / {{groupHint}} / {{transcript}} 占位符）"),
+          h(AreaField, {
+            label: "自定义提示词",
+            rows: 8,
+            value: knowledgePromptText,
+            placeholder: "留空使用内置模板；点下方「查看内置模板」可复制/参考",
+            onChange: setKnowledgePromptText,
+          }),
+          h(
+            "div",
+            { className: "qqb-toolbar" },
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm qqb-btn--primary",
+                onClick: function () {
+                  patchAutoExtract({ prompt: knowledgePromptText });
+                },
+              },
+              "保存提示词",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm",
+                onClick: function () {
+                  setKnowledgePromptText("");
+                  patchAutoExtract({ prompt: "" });
+                },
+              },
+              "恢复默认",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm",
+                onClick: function () {
+                  setKnowledgePromptPreview(function (prev) { return !prev; });
+                },
+              },
+              knowledgePromptPreview ? "收起模板" : "查看内置模板（占位符运行时替换）",
+            ),
+          ),
+          knowledgePromptPreview
+            ? h("pre", { className: "qqb-pre" }, knowledgePromptText.trim() !== "" ? knowledgePromptText : knowledgePromptDefault || "（服务端未返回内置模板）")
+            : null,
+          knowledgePromptText.trim() !== "" ? h("p", { className: "qqb-help" }, "当前使用：自定义提示词") : null,
         ),
       );
 
@@ -6657,6 +6719,9 @@ window.__ModuleLoader__.load({
       const [membersExtractError, setMembersExtractError] = react.useState("");
       const [membersExtractTranscript, setMembersExtractTranscript] = react.useState("");
       const [membersExtractStats, setMembersExtractStats] = react.useState(null);
+      const [membersPromptText, setMembersPromptText] = react.useState("");
+      const [membersPromptDefault, setMembersPromptDefault] = react.useState("");
+      const [membersPromptPreview, setMembersPromptPreview] = react.useState(false);
 
       function patchMembersProfileExtract(partial) {
         const next = Object.assign({}, membersProfileCfg, partial || {});
@@ -6697,7 +6762,12 @@ window.__ModuleLoader__.load({
       const loadMembersExtractStats = react.useCallback(async function () {
         try {
           const data = await apiGet(API + "/members/extract/stats");
-          setMembersExtractStats(data && data.stats ? data.stats : null);
+          const stats = data && data.stats ? data.stats : null;
+          setMembersExtractStats(stats);
+          if (stats && stats.prompt) {
+            setMembersPromptText(typeof stats.prompt.override === "string" ? stats.prompt.override : "");
+            setMembersPromptDefault(typeof stats.prompt.default === "string" ? stats.prompt.default : "");
+          }
         } catch (error) {
           setMembersExtractStats(null);
         }
@@ -6983,6 +7053,60 @@ window.__ModuleLoader__.load({
               membersExtracting ? "正在提炼…" : "立即提炼",
             ),
           ),
+        ),
+        h(
+          "div",
+          { className: "qqb-prompt-note" },
+          h("p", { className: "qqb-help" }, "提炼提示词（留空 = 使用内置模板；支持 {{candidates}} / {{maxMembers}} / {{groupHint}} / {{transcript}} 占位符）"),
+          h(AreaField, {
+            label: "自定义提示词",
+            rows: 8,
+            value: membersPromptText,
+            placeholder: "留空使用内置模板；点下方「查看内置模板」可复制/参考",
+            onChange: setMembersPromptText,
+          }),
+          h(
+            "div",
+            { className: "qqb-toolbar" },
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm qqb-btn--primary",
+                onClick: function () {
+                  patchMembersProfileExtract({ prompt: membersPromptText });
+                },
+              },
+              "保存提示词",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm",
+                onClick: function () {
+                  setMembersPromptText("");
+                  patchMembersProfileExtract({ prompt: "" });
+                },
+              },
+              "恢复默认",
+            ),
+            h(
+              "button",
+              {
+                type: "button",
+                className: "qqb-btn qqb-btn--sm",
+                onClick: function () {
+                  setMembersPromptPreview(function (prev) { return !prev; });
+                },
+              },
+              membersPromptPreview ? "收起模板" : "查看内置模板（占位符运行时替换）",
+            ),
+          ),
+          membersPromptPreview
+            ? h("pre", { className: "qqb-pre" }, membersPromptText.trim() !== "" ? membersPromptText : membersPromptDefault || "（服务端未返回内置模板）")
+            : null,
+          membersPromptText.trim() !== "" ? h("p", { className: "qqb-help" }, "当前使用：自定义提示词") : null,
         ),
       );
 
