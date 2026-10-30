@@ -1102,3 +1102,15 @@ createStickerStore({ settings, logger }) => {
 - routes：/members/extract/stats、/knowledge/extract/stats 原样透出 prompt 信息。
 - UI：两个提炼卡片增加「自定义提示词」textarea + 保存/恢复默认/查看内置模板（pre 预览）；占位符说明。
 - 0.19.3 起 record=null 手动提炼回退 lastRecord / manager.latestRecord()；本次 UI 提示词让行为可观察可调。
+
+# v0.20.1（2026-10-30）：提炼器读不到会话消息的根因修复
+
+- 现象：群友画像/知识库自动提炼一直 0 产出；手动立即提炼报「没有可提炼的消息」。
+- 根因：dsh 事件是 `{type:'user/message', data:{message:{content:[...]}}}`；
+  `lib/members/profile-extract.js` 与 `lib/knowledge/auto-extract.js` 的 extractMessages 只读 `event.message`，
+  live 全部解析成 0 条（单元测试用的是 `message` 形态，所以测试没暴露）。
+- 修复：新增 `lib/context/session-events.js`，统一 getEvents/extractMessages：
+  - session.events 数组 / events() / snapshotEvents() / log；
+  - 事件兼容 data.message、message、data 三种形态；
+  - 两个提炼器改为 import 共用（记忆 collector 本来就有兼容实现）。
+- 回归：新增真实 data.message 形态的提炼用例（4 条消息 → 更新 1 位）。

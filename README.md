@@ -189,6 +189,15 @@ v0.16 把单机器人插件升级成**多机器人宿主**，并补齐长期记�
 - 配合 0.19.3：手动「立即提炼」留空会使用最近一次会话的消息（不再空跑）；
 - 提炼统计接口额外返回 `prompt: {default, override, resolved, placeholders}`。
 
+### v0.20.1：修复提炼器读不到会话消息（根因）
+
+- 根因：dsh 的 session 事件形态是 `{ type, data: { message: { content } } }`，
+  而提炼器之前读的是 `event.message`，**每条会话都解析出 0 条消息** →
+  群友画像、知识库自动提炼永远提示「没有可提炼的消息」，手动「立即提炼」也拿不到内容。
+- 修复：新增共用 `lib/context/session-events.js`（兼容 `data.message` / `message` / `data`，
+  session.events / events() / snapshotEvents() / log），两个提炼器统一使用；
+- 回归测试：用真实 `data.message` 事件形态断言能解析出 4 条消息并更新画像。
+
 ### 数据布局（每个机器人一个工作区）
 
 ```

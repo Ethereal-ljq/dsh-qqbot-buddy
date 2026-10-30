@@ -207,3 +207,26 @@ test('手动提炼留空：退回最近一次会话的消息（record=null 也�
   assert.equal(result.scannedMessages, 4);
   assert.equal(result.updated.length, 1);
 });
+
+test('解析 dsh 真实事件形态 data.message（此前读 event.message 导致 0 条消息）', async () => {
+  const { store, settings } = makeEnv({ perMemberHours: 0, everyRounds: 100 });
+  store.visit({ groupId: 'g1', openid: 'U1', name: '阿岚' });
+  const extractor = makeExtractor({ store, settings, reply: REPLY });
+  const record = {
+    scope: 'group',
+    peerId: 'g1',
+    session: {
+      events: [
+        { type: 'user/message', data: { message: { content: [{ type: 'text', text: '[阿岚 (U1)] 我周末都在线，喜欢原神' }] } } },
+        { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '好的' }] } } },
+        { type: 'user/message', data: { message: { content: [{ type: 'text', text: '[阿岚 (U1)] 我常组织周六开黑' }] } } },
+        { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '收到' }] } } },
+      ],
+    },
+  };
+  extractor.noteTurnEnd(record);
+  const result = await extractor.extractNow(null, { groupId: 'g1' });
+  assert.equal(result.ok, true);
+  assert.equal(result.scannedMessages, 4);
+  assert.equal(result.updated.length, 1);
+});
