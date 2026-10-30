@@ -118,6 +118,8 @@ v0.16 把单机器人插件升级成**多机器人宿主**，并补齐长期记�
 - 规则：空备注直接写正文；已有人工备注不覆盖，只追加到「自动补充」；每位最多 5 条事实；
   marker 文件 `<state>/memory-backfill-v1.json` 保证只跑一次（之后由自动提炼继续补充）。
 - 只读记忆、不改记忆；没有匹配到事实的群友保持原样。
+- **注意：该「直接回填记忆」的做法已在 v0.19.0 移除**（改为专用提示词的模型提炼），
+  v0.20.2 起会在启动时自动清理这批历史遗留备注，只保留与本人相关的内容。
 
 ### v0.19.0：群友画像（结构化 + 专用提炼）+ 知识库行内编辑
 
@@ -380,6 +382,16 @@ git pull && node scripts/install.mjs --spec .
 ```
 
 更新后重启 dsh 生效（运行期设置是人设/频率那些，存在 `~/.dsh-qqbot/buddy/settings.json`，升级不会丢）。
+
+> 如果 `npx -y github:...` 卡在拉取（国内访问 GitHub HTTPS 不稳定），可临时让 git 走 SSH：
+>
+> ```bash
+> git config --global url."git@github.com:".insteadOf "https://github.com/"
+> npx -y github:Ethereal-ljq/dsh-qqbot-buddy
+> git config --global --unset url."git@github.com:".insteadOf
+> ```
+>
+> 更新已安装实例也可以直接：`dsh plugin --profile web update dsh-qqbot-buddy`（同样需要能访问 GitHub）。
 
 ### 卸载
 
