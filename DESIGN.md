@@ -1114,3 +1114,12 @@ createStickerStore({ settings, logger }) => {
   - 事件兼容 data.message、message、data 三种形态；
   - 两个提炼器改为 import 共用（记忆 collector 本来就有兼容实现）。
 - 回归：新增真实 data.message 形态的提炼用例（4 条消息 → 更新 1 位）。
+
+# v0.20.2（2026-10-30）：群友备注清理与“只写本人”约束
+
+- 0.18.2 曾把 MEMORY.md 中提及某群友的事实一次性拼进 body 备注（如群称呼表、他人纠纷、机器人行为），
+  导致备注不聚焦；该回填已在 0.19.0 移除，本版清理其遗留数据。
+- members.cleanupLegacyNotes({dryRun})：按 ；/换行 拆句；保留含本人昵称/别名/常见称呼的句子；
+  丢弃未提本人、含 ≥2 位其他群友、或“称呼表/速记/群内约定”且牵涉他人的句子；重写 body。
+- runtime 首次启动执行一次（marker member-notes-cleanup-v1.json）。
+- profile-extract 提示词第 2 条改为「只写这个群友本人；群内通用约定/别人的事/机器人的事不写」。
