@@ -1232,6 +1232,8 @@ window.__ModuleLoader__.load({
       const adaptiveSetting = reply.adaptive && typeof reply.adaptive === "object" ? reply.adaptive : {};
       const mappedReply = Object.assign({}, reply, {
         bubbleSplit: reply.bubbleSplit === "marker" || reply.bubbleSplit === "off" ? reply.bubbleSplit : "auto",
+        // 新开关：未落盘（旧 settings.json）时按默认开启显示
+        proactiveFallback: reply.proactiveFallback !== false,
         adaptive: {
           debounceSeconds: typeof adaptiveSetting.debounceSeconds === "number" ? adaptiveSetting.debounceSeconds : 4,
           cooldownSeconds: typeof adaptiveSetting.cooldownSeconds === "number" ? adaptiveSetting.cooldownSeconds : 12,
@@ -1443,9 +1445,95 @@ window.__ModuleLoader__.load({
               patch({ c2cEnabled: value });
             },
           }),
+          h(Switch, {
+            label: "被动失败时主动兜底",
+            help: "被动回复窗口不可用或发送失败时，降级成主动消息再发一次（有频率限制）",
+            checked: draft.proactiveFallback !== false,
+            onChange: function (value) {
+              patch({ proactiveFallback: value });
+            },
+          }),
           h("p", { className: "qqb-summary" }, (snapshot.effective && snapshot.effective.summary) || "—"),
           h(SaveBar, { dirty: dirty, status: status, onSave: save, note: "有未保存的回复频率修改", label: "保存回复频率" }),
         ),
+        h(WelcomeCard, { snapshot: snapshot, reload: props.reload }),
+      );
+    }
+
+    /**
+     * 「欢迎语」卡片（对话 → 回复策略页内）：
+     * 加好友 / 入群各一个开关 + 一段自定义文案；文本留空 = 用内置默认。
+     * 独立草稿与保存按钮，保存走 POST /settings 的 welcome 补丁，热生效。
+     */
+    function WelcomeCard(props) {
+      const snapshot = props.snapshot;
+      const settings = snapshot && snapshot.settings ? snapshot.settings : null;
+      const welcomeSetting = settings && settings.welcome && typeof settings.welcome === "object" ? settings.welcome : {};
+      const mappedWelcome = {
+        friendEnabled: welcomeSetting.friendEnabled === true,
+        groupEnabled: welcomeSetting.groupEnabled === true,
+        friendText: typeof welcomeSetting.friendText === "string" ? welcomeSetting.friendText : "",
+        groupText: typeof welcomeSetting.groupText === "string" ? welcomeSetting.groupText : "",
+      };
+      const [draft, setDraft] = useDraft(mappedWelcome);
+      const [status, run] = useSaver(props.reload);
+
+      if (!settings) return null;
+
+      const dirty = !sameJSON(draft, mappedWelcome);
+
+      function patch(partial) {
+        setDraft(function (prev) {
+          return Object.assign({}, prev, partial);
+        });
+      }
+
+      function save() {
+        void run(async function () {
+          await apiPost(API + "/settings", { patch: { welcome: clone(draft) } });
+        }, "欢迎语已保存");
+      }
+
+      return h(
+        Card,
+        { title: "欢迎语", hint: "加好友 / 入群时主动说一句" },
+        h(Switch, {
+          label: "好友欢迎语",
+          help: "通过好友申请后主动发一条私聊问候",
+          checked: draft.friendEnabled === true,
+          onChange: function (value) {
+            patch({ friendEnabled: value });
+          },
+        }),
+        h(Switch, {
+          label: "群欢迎语",
+          help: "机器人被拉进群后，在群里发一条自我介绍",
+          checked: draft.groupEnabled === true,
+          onChange: function (value) {
+            patch({ groupEnabled: value });
+          },
+        }),
+        h(AreaField, {
+          label: "好友欢迎语文案",
+          rows: 3,
+          value: draft.friendText,
+          placeholder: "留空使用内置默认文案；最长 500 字",
+          help: "留空 = 内置默认。不会自动补人设，写一句就行。",
+          onChange: function (value) {
+            patch({ friendText: value });
+          },
+        }),
+        h(AreaField, {
+          label: "群欢迎语文案",
+          rows: 3,
+          value: draft.groupText,
+          placeholder: "留空使用内置默认文案；最长 500 字",
+          help: "留空 = 内置默认。会在群里发一条自我介绍。",
+          onChange: function (value) {
+            patch({ groupText: value });
+          },
+        }),
+        h(SaveBar, { dirty: dirty, status: status, onSave: save, note: "有未保存的欢迎语修改", label: "保存欢迎语" }),
       );
     }
 

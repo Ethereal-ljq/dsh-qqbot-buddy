@@ -31,11 +31,13 @@ const BASE = {
 
 test('默认：内置 7 能力开启，imagegen/skills 关闭，工具集不含它们', () => {
   const plan = catalog(BASE).resolve();
-  // v0.16 起 knowledge / members 与记忆同级，默认开启
-  assert.deepEqual(plan.enabled, ['workspace', 'web', 'memory', 'knowledge', 'members', 'stickers', 'vision']);
+  // v0.16 起 knowledge / members 与记忆同级，默认开启；v0.21 起 card / quote 默认开启
+  assert.deepEqual(plan.enabled, ['workspace', 'web', 'memory', 'knowledge', 'members', 'stickers', 'card', 'quote', 'vision']);
   assert.ok(plan.tools.includes('read'));
   assert.ok(plan.tools.includes('web_search'));
   assert.ok(plan.tools.includes('qqbot_describe_image'));
+  assert.ok(plan.tools.includes('qqbot_send_card'), '图文卡片工具默认放行');
+  assert.ok(plan.tools.includes('qqbot_quote_reply'), '引用回复工具默认放行');
   // 默认拒绝：图片生成、技能工具都不在放行集
   assert.ok(!plan.tools.includes('generate_image'));
   assert.ok(!plan.tools.includes('edit_image'));
@@ -82,6 +84,17 @@ test('表情包：关闭收藏后只给发送工具', () => {
   }).resolve();
   assert.ok(plan.tools.includes('qqbot_send_file'));
   assert.ok(!plan.tools.includes('qqbot_sticker_save'));
+});
+
+test('图文卡片能力可单独关闭', () => {
+  const plan = catalog({
+    ...BASE,
+    tools: { ...BASE.tools, capabilities: { ...BASE.tools.capabilities, card: false } },
+  }).resolve();
+  assert.ok(!plan.enabled.includes('card'));
+  assert.ok(!plan.tools.includes('qqbot_send_card'));
+  // 其它媒体/表情能力不受影响
+  assert.ok(plan.tools.includes('qqbot_send_file'));
 });
 
 test('记忆总开关关闭时记忆能力一并失效', () => {
@@ -147,7 +160,7 @@ test('capabilities 全关时放行为空（合法状态，不报错）', () => {
   const plan = catalog({
     ...BASE,
     features: { workspace: false, web: false, stickers: false, vision: false, memory: false },
-    tools: { ...BASE.tools, capabilities: { skills: false, imagegen: false, knowledge: false, members: false } },
+    tools: { ...BASE.tools, capabilities: { skills: false, imagegen: false, knowledge: false, members: false, card: false, quote: false } },
   }).resolve();
   assert.deepEqual(plan.tools, []);
   assert.deepEqual(plan.mounts, []);

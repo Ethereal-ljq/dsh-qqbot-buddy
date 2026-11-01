@@ -73,6 +73,7 @@ dsh-qqbot-buddy/
 │   │   └── media-cleaner.js     # server-dev：媒体 TTL 清理
 │   ├── tools/
 │   │   ├── send-file.js         # server-dev：qqbot_send_file
+│   │   ├── send-card.js         # server-dev：qqbot_send_card（图文卡片 msg_type=8）
 │   │   ├── vision.js            # server-dev：qqbot_describe_image
 │   │   └── memory-tools.js      # memory-dev：memory_save/search/read/list
 │   ├── memory/
@@ -262,6 +263,8 @@ export function pendingSnapshot(state): [...];
 ```
 规则见上文 settings 说明。`reason==='cooldown'` 表示轮到但被 minGap 拦下（stats 记 skip）。
 
+
+
 ### qq/gateway.js（server-dev）
 
 - 依据 config 创建 `new QQBot({appId, appSecret, transport:'websocket', baseUrl, tokenBaseUrl, userAgent, logger})`。
@@ -317,12 +320,34 @@ export function pendingSnapshot(state): [...];
 ### qq/outbound.js（server-dev）
 
 - `ctx.on('session/event', handler)`：`assistant/message` 取文本块 → `splitSegments`（`[[msg]]`，兼容）→ `splitBlankLineSegments`（空行自动拆条兜底）
-  → 每条 `chunkMarkdown`（按 `textChunkLimit` 4500，感知代码块）→ `bot.sendMarkdown(record.replyTarget, chunk)`。
+  → 每条 `chunkMarkdown`（按 `textChunkLimit` 4500，感知代码块）→ `sender.sendMarkdown(record.replyTarget, chunk, { quote })`。
 - `turn/end`：若 reason 为失败 → 发一条 `⚠️ 本轮异常结束`（静默码 STREAM_CLOSED 除外）；
   调 `collector.noteTurnEnd(record)`；更新 stats.replies。
-- 发送失败记日志；`sendMarkdown` 用 record.replyTarget（带 msgId 被动回复）；
-  失败时尝试无 msgId 发送一次（active push），仍失败则放弃。
+- 引用回复由模型自选：模型调用 `qqbot_quote_reply` 时把 `record.quoteNext=true`，
+  turn/end 发送首条时带 `message_reference`（`target.refIdx` ← 入站 `msg.msgIdx`），发送后清零；
+  每条新入站消息进入时也会清零。普通回复不引用。
 - 支持 `[[msg]]` 分条与 markdown 长文切分（可参考官方 `transport/chunker.js`、`outbound.js`）。
+
+### qq/sender.js（v0.21）
+
+- 每 bot 一个 sender（`gateway.js` 装配，`budgets` 跨重连保留）：
+  - 被动预算：复用 SDK `ReplyLimiter`（c2c 4 次/60min、group 5 次/5min，可配）；用满或窗口失效直接走主动。
+  - 错误码分类（`qq/error-codes.js`）：窗口→主动；markdown 权限/格式→纯文本（权限类标记 bot 降级）；
+    去重→换 msg_seq；频控/瞬时→退避；永久错误→放弃。
+  - 主动消息闸门：单关系 20/min + 1000/天，Bot 10/s；超限排队，超时/日限额返回失败而不是打满。
+  - 引用回复：模型通过 `qqbot_quote_reply` 标记（`record.quoteNext`）时，被动首条带 `message_reference`；
+    引用本身被拒时自动去掉引用重试。
+  - 统计：`sender.status()` → `/api/state.sendStatus`（markdown 可用性、passive/proactive/degraded/failed、最近失败）。
+- `qq/commands.js` 与 `qq/inbound.js` 的兜底提示也走 sender（不再各自直调 `sendMarkdown`）。
+
+### qq/events.js / qq/interaction.js（v0.21）
+
+- `rawEvent`：FRIEND_ADD / GROUP_ADD_ROBOT → 按 `settings.welcome` 发欢迎语（`sendProactive`；
+  SDK 1.0.5 rawEvent 不透传事件外层 id，无法 event_id 被动回复）；C2C/GROUP_MSG_RECEIVE/REJECT → 记录主动消息许可；
+  按 eventType+openid+timestamp 做 10 分钟幂等。
+- `interaction`：type 11/12 先 ack(0) 再按 `settings.interaction.feedToAgent` 投喂 agent；13 记反馈统计；
+  14 按开关 `manager.reset`；15/16/18/19/20 只记日志；未知类型不 ack（旧实现无条件 ack 3 是错的）。
+- 入站去重：`messageFilter` 窗口从 5s 扩到 10min（重连补发）。
 
 ### qq/commands.js（server-dev）
 
@@ -564,6 +589,7 @@ createBindingService({ logger, profileDir, getCredentials, onBound, onUnbind, so
 4. 全局工具白名单（agentCtx 的 tools.restrict，替换 preset 里的 guard 插件）：
    - `memory_*`（features.memory && settings.memory.enabled）
    - `qqbot_send_file`（features.stickers）
+   - `qqbot_send_card`（capability=card，v0.21 起默认开）
    - `qqbot_describe_image`（features.vision）
    - 其它全局工具一律不暴露；restrict 对未知名称报错时解析 known global tools 取交集重试，仍失败则 warn 跳过。
    - 宿主 preset 模式（presetId !== 'qqbot-buddy'）下：workspace/web 开关无效（由该 preset 自带工具决定），
@@ -803,6 +829,7 @@ createStickerStore({ settings, logger }) => {
 ## 气泡拆分设置（2026-10-26 下午）
 
 - settings.reply.bubbleSplit：'auto'（默认，空行自动拆）/ 'marker'（只认 [[msg]]）/ 'off'（永不拆）。
+- 引用回复不再有 `reply.quoteReply` 设置：由模型自选（`qqbot_quote_reply`），能力开关在 catalog 的 `quote` 能力。
 - auto 恢复简单行为：2~4 个空行段、总长 <=900、每段 <=420 就拆；不再做"短句并回"的智能合并。
 - 回复字数控制交给 prompt/persona：大多数回复只发一条、1~2 句，不要每次补第二段；内容多才分条。
 - 版本 0.5.2。

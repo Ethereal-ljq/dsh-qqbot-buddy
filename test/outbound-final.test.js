@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOutboundHandler } from '../lib/qq/outbound.js';
+import { createOutboundHandler, createSentTracker } from '../lib/qq/outbound.js';
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
@@ -29,6 +29,14 @@ function makeRig() {
   });
   return { sent, stats, handler };
 }
+
+test('sentTracker 同时记录消息 id 与引用 ref_idx', () => {
+  const tracker = createSentTracker();
+  tracker.record({ id: 'ROBOT1.0_msg', ext_info: { ref_idx: 'REFIDX_abc==' } }, 'hello world');
+  assert.equal(tracker.hasId('ROBOT1.0_msg'), true);
+  assert.equal(tracker.hasId('REFIDX_abc=='), true, 'ref_idx 也应能被 replyProbe 命中');
+  assert.equal(tracker.hasText('hello world'), true);
+});
 
 const assistant = (text, withToolCall) => ({
   type: 'assistant/message',
@@ -133,3 +141,58 @@ test('bubbleSplit=off：永不拆（[[msg]] 也不拆）', async () => {
   await tick();
   assert.deepEqual(sent, ['第一句\n\n第二句[[msg]]第三句']);
 });
+
+test('注入 sender 时走统一发送器，模型标记引用时只加在首条气泡', async () => {
+  const sent = [];
+  const record = { replyTarget: { scope: 'c2c', targetId: 'u1', msgId: 'm1', refIdx: 'REFIDX_x' }, quoteNext: true };
+  const sender = {
+    async sendMarkdown(target, text, opts) {
+      sent.push({ text, quote: opts && opts.quote, target });
+      return { ok: true, result: { id: 's' + sent.length } };
+    },
+  };
+  const handler = createOutboundHandler({
+    config: {}, logger: { warn() {}, error() {}, debug() {} },
+    manager: { findBySessionId: () => record }, stats: { replies: 0, lastReplyAt: 0 },
+    getBot: () => ({ sendMarkdown: async () => ({ id: 'legacy' }) }),
+    getSender: () => sender,
+  });
+  handler({ header: { id: 's1' } }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '第一段\n\n第二段' }] } } });
+  handler({ header: { id: 's1' } }, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(sent.map((item) => item.text), ['第一段', '第二段']);
+  assert.equal(sent[0].quote, true, '模型标记引用后，首条应引用');
+  assert.equal(sent[1].quote, false, '后续气泡不重复引用');
+  assert.equal(record.quoteNext, false, '引用标记发送后应清零');
+});
+
+test('模型没有调用 qqbot_quote_reply 时默认不引用', async () => {
+  const sent = [];
+  const record = { replyTarget: { scope: 'c2c', targetId: 'u1', msgId: 'm1', refIdx: 'REFIDX_x' } };
+  const handler = createOutboundHandler({
+    config: {}, logger: { warn() {}, error() {}, debug() {} },
+    manager: { findBySessionId: () => record }, stats: { replies: 0, lastReplyAt: 0 },
+    getBot: () => ({ sendMarkdown: async () => ({ id: 'legacy' }) }),
+    getSender: () => ({ async sendMarkdown(_t, text, opts) { sent.push({ text, quote: opts && opts.quote }); return { ok: true, result: { id: 'x' } }; } }),
+  });
+  handler({ header: { id: 's1' } }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '普通回复' }] } } });
+  handler({ header: { id: 's1' } }, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(sent[0].quote, false);
+});
+
+test('sender 发送失败时不统计为已回复', async () => {
+  const record = { replyTarget: { scope: 'c2c', targetId: 'u1', msgId: 'm1' } };
+  const stats = { replies: 0, lastReplyAt: 0 };
+  const handler = createOutboundHandler({
+    config: {}, logger: { warn() {}, error() {}, debug() {} },
+    manager: { findBySessionId: () => record }, stats,
+    getBot: () => ({ sendMarkdown: async () => ({ id: 'legacy' }) }),
+    getSender: () => ({ async sendMarkdown() { return { ok: false, code: '40034006' }; } }),
+  });
+  handler({ header: { id: 's1' } }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'hi' }] } } });
+  handler({ header: { id: 's1' } }, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(stats.replies, 0);
+});
+

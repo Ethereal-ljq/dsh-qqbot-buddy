@@ -813,3 +813,84 @@ test('prompts.sections：patchReplace 可整体清空（深合并删不掉键）
   await store.patchReplace({ prompts: { sections: {} } }, ['prompts.sections']);
   assert.deepEqual(store.get().prompts.sections, {}, 'patchReplace 应清空分段覆盖');
 });
+
+// ── 消息线 P1-B：引用回复 / 主动兜底 / 欢迎语 / 互动 ──────────────
+
+test('reply.proactiveFallback：默认开；可关闭；非布尔回退默认', async (t) => {
+  const { store, defaults } = makeStore(t);
+  assert.equal(defaults.reply.proactiveFallback, true);
+  assert.equal(store.get().reply.proactiveFallback, true);
+
+  const off = await store.patch({ reply: { proactiveFallback: false } });
+  assert.equal(off.settings.reply.proactiveFallback, false);
+  assert.deepEqual(off.changed, ['reply.proactiveFallback']);
+
+  // 非布尔值回退默认 true；未知字段丢弃。
+  const invalid = await store.patch({ reply: { proactiveFallback: 0, unknownReplyFlag: true } });
+  assert.equal(invalid.settings.reply.proactiveFallback, true);
+  assert.equal('unknownReplyFlag' in invalid.settings.reply, false);
+});
+
+test('welcome：默认关闭且文案为空；深合并单个开关不影响其它字段', async (t) => {
+  const { store, defaults } = makeStore(t);
+  assert.deepEqual(defaults.welcome, { friendEnabled: false, groupEnabled: false, friendText: '', groupText: '' });
+  assert.deepEqual(store.get().welcome, defaults.welcome);
+
+  const first = await store.patch({ welcome: { friendEnabled: true, friendText: '你好呀，我是 QQ 助手' } });
+  assert.deepEqual(first.changed, ['welcome.friendEnabled', 'welcome.friendText']);
+  assert.equal(first.settings.welcome.friendEnabled, true);
+  assert.equal(first.settings.welcome.friendText, '你好呀，我是 QQ 助手');
+  assert.equal(first.settings.welcome.groupEnabled, false, '未改的开关保持默认');
+  assert.equal(first.settings.welcome.groupText, '', '未改的文案保持默认');
+});
+
+test('welcome：文案非字符串回退空串、超长截断到 500、未知字段丢弃', async (t) => {
+  const { store } = makeStore(t);
+  const long = await store.patch({ welcome: { friendText: 'a'.repeat(600), groupText: 'b'.repeat(600) } });
+  assert.equal(long.settings.welcome.friendText.length, 500);
+  assert.equal(long.settings.welcome.groupText.length, 500);
+
+  const invalid = await store.patch({
+    welcome: { friendText: 123, groupText: ['x'], friendEnabled: 'yes', unknownWelcome: 'x' },
+  });
+  assert.equal(invalid.settings.welcome.friendText, '');
+  assert.equal(invalid.settings.welcome.groupText, '');
+  assert.equal(invalid.settings.welcome.friendEnabled, false);
+  assert.equal('unknownWelcome' in invalid.settings.welcome, false);
+});
+
+test('interaction：默认 feedToAgent/resetOnClearSession 开启，可关闭且丢弃未知字段', async (t) => {
+  const { store, defaults } = makeStore(t);
+  assert.deepEqual(defaults.interaction, { feedToAgent: true, resetOnClearSession: true });
+  assert.deepEqual(store.get().interaction, defaults.interaction);
+
+  const off = await store.patch({ interaction: { feedToAgent: false } });
+  assert.deepEqual(off.changed, ['interaction.feedToAgent']);
+  assert.equal(off.settings.interaction.feedToAgent, false);
+  assert.equal(off.settings.interaction.resetOnClearSession, true);
+
+  const invalid = await store.patch({ interaction: { feedToAgent: 'no', resetOnClearSession: 0, unknownInteraction: 1 } });
+  assert.deepEqual(invalid.settings.interaction, { feedToAgent: true, resetOnClearSession: true });
+  assert.equal('unknownInteraction' in invalid.settings.interaction, false);
+});
+
+test('新设置段：空对象补默认，未知顶层段丢弃', async (t) => {
+  const { store, defaults } = makeStore(t);
+  const { settings } = await store.patch({ welcome: {}, interaction: {}, unknownSection: { a: 1 } });
+  assert.deepEqual(settings.welcome, defaults.welcome);
+  assert.deepEqual(settings.interaction, defaults.interaction);
+  assert.equal('unknownSection' in settings, false);
+});
+
+test('旧 settings.json 缺新字段：加载时自动补默认，旧值保留', (t) => {
+  const { dir, defaults, logger } = makeStore(t);
+  const file = path.join(dir, 'settings.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, reply: { enabled: false, countThreshold: 7 } }), 'utf8');
+  const store = createSettingsStore({ file, defaults, logger });
+  const snapshot = store.get();
+  assert.equal(snapshot.reply.proactiveFallback, true);
+  assert.deepEqual(snapshot.welcome, defaults.welcome);
+  assert.deepEqual(snapshot.interaction, defaults.interaction);
+  assert.equal(snapshot.reply.enabled, false, '已有字段保持');
+  assert.equal(snapshot.reply.countThreshold, 7);
+});
