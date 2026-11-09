@@ -16,7 +16,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorNote } from '../components/ErrorNote';
 import { Field } from '../components/Field';
 import { PageHeader } from '../components/PageHeader';
-import { fmtTimeSmart, prettyJson, truncate } from '../lib/format';
+import { fmtTimeSmart, prettyJson } from '../lib/format';
 import { navigate } from '../router';
 import { useApp } from '../state/AppContext';
 import { useApi } from '../state/useApi';

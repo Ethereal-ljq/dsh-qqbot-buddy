@@ -23,10 +23,10 @@ export const ROUTES: RouteDef[] = [
   { path: '/settings', label: '设置', group: '配置' },
   { path: '/tools', label: '工具与技能', group: '配置' },
   { path: '/knowledge', label: '知识库', group: '数据' },
-  { path: '/memory', label: '记忆', group: '数据', pending: true },
-  { path: '/members', label: '群友库', group: '数据', pending: true },
-  { path: '/personas', label: '人格卡', group: '数据', pending: true },
-  { path: '/stickers', label: '表情包', group: '数据', pending: true },
+  { path: '/memory', label: '记忆', group: '数据' },
+  { path: '/members', label: '群友库', group: '数据' },
+  { path: '/personas', label: '人格卡', group: '数据' },
+  { path: '/stickers', label: '表情包', group: '数据' },
   { path: '/audit', label: '审计日志', group: '系统' },
 ];
 

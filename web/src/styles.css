@@ -399,6 +399,7 @@ a { color: inherit; }
 }
 .readout { padding: 13px 16px 12px; border-left: 1px solid var(--hairline); display: flex; flex-direction: column; }
 .readout:first-child { border-left: 0; }
+.readouts-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .readout-num { font-size: 26px; line-height: 1.05; font-weight: 500; letter-spacing: -0.03em; color: var(--ink); }
 .readout-label { margin-top: 3px; font-size: 11.5px; font-weight: 500; color: var(--ink-2); }
 .readout-sub { margin-top: 1px; font-size: 10.5px; color: var(--ink-3); }
@@ -520,6 +521,7 @@ a { color: inherit; }
 .data-table .align-center { text-align: center; }
 .cell-stack { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .cell-title { font-size: 12.5px; font-weight: 550; color: var(--ink); }
+.cell-title .badge { margin-left: 6px; vertical-align: 1px; }
 .cell-sub { font-size: 11px; color: var(--ink-3); }
 .cell-inline { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .row-actions { display: inline-flex; align-items: center; gap: 3px; justify-content: flex-end; flex-wrap: wrap; }
@@ -527,6 +529,27 @@ a { color: inherit; }
 .table-foot { border-top: 1px solid var(--hairline); background: var(--surface); }
 .table-foot-inner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 14px; font-size: 10.5px; }
 .detail-cell { display: block; max-width: 640px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.memory-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 760px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.sub-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.persona-preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-width: 760px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+.persona-editor { min-height: 220px; line-height: 1.65; }
 
 .skeleton {
   display: block;

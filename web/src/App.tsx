@@ -11,10 +11,13 @@ import { AuditPage } from './pages/AuditPage';
 import { BotsPage } from './pages/BotsPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { LoginPage } from './pages/LoginPage';
+import { MembersPage } from './pages/MembersPage';
+import { MemoryPage } from './pages/MemoryPage';
 import { OverviewPage } from './pages/OverviewPage';
-import { PLACEHOLDER_SPECS, PlaceholderPage } from './pages/PlaceholderPage';
+import { PersonasPage } from './pages/PersonasPage';
 import { ProfilesPage } from './pages/ProfilesPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { StickersPage } from './pages/StickersPage';
 import { ToolsPage } from './pages/ToolsPage';
 import { navigate, routeOf, useRoutePath } from './router';
 import { AppProvider, useApp } from './state/AppContext';
@@ -54,11 +57,12 @@ function renderRoute(path: string) {
     case '/settings': return <SettingsPage />;
     case '/tools': return <ToolsPage />;
     case '/knowledge': return <KnowledgePage />;
+    case '/memory': return <MemoryPage />;
+    case '/members': return <MembersPage />;
+    case '/personas': return <PersonasPage />;
+    case '/stickers': return <StickersPage />;
     case '/audit': return <AuditPage />;
-    default: {
-      const spec = PLACEHOLDER_SPECS[path];
-      return spec ? <PlaceholderPage spec={spec} /> : <NotFound path={path} />;
-    }
+    default: return <NotFound path={path} />;
   }
 }
 
