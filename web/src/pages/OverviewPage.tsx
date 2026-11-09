@@ -1,21 +1,28 @@
 /**
- * pages/OverviewPage —— 总览：运行读数、机器人运行状态、控制台信息与实时事件。
+ * pages/OverviewPage —— 总览：运行读数、机器人运行状态与动作、控制台信息与实时事件。
  *
- * 数据源：/api/state 快照（context 统一维护）+ /api/events SSE 事件（实时横条与列表）。
+ * 数据源：/api/state 快照（context 统一维护）+ /api/events SSE。
+ * 启停/重启调用 /api/actions/{start-bot|stop-bot|restart-bot}；
+ * start 失败时宿主返回 {ok:false}，可读原因来自 bot/status 事件的 error（context.botErrors）。
  */
 import { useState } from 'react';
 
 import { api, toApiError } from '../api/client';
-import { Badge, StatusDot, runtimeTone } from '../components/Status';
+import type { Bot } from '../api/types';
 import { DataTable, type Column } from '../components/DataTable';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorNote } from '../components/ErrorNote';
 import { PageHeader } from '../components/PageHeader';
+import { Badge, StatusDot, runtimeTone } from '../components/Status';
+import { actionFeedback, summarizeActionResult } from '../lib/actions';
 import { fmtDateTime, fmtDuration, fmtNumber, fmtTimeSmart, summarizeEvent, truncate } from '../lib/format';
 import { navigate } from '../router';
 import { useApp } from '../state/AppContext';
-import type { Bot } from '../api/types';
 
+type BotAction = 'start' | 'stop' | 'restart';
+
+const ACTION_NAME: Record<BotAction, string> = { start: 'start-bot', stop: 'stop-bot', restart: 'restart-bot' };
+const ACTION_VERB: Record<BotAction, string> = { start: '启动', stop: '停止', restart: '重启' };
 const RUNNING_STATUS = new Set(['online', 'running', 'ready', 'connected', 'starting']);
 const EVENT_LABEL: Record<string, string> = {
   hello: '已连接',
@@ -32,6 +39,7 @@ function isRunning(status?: string): boolean {
 export function OverviewPage() {
   const {
     state, stateError, loadingState, reloadState, health, sse, events, setBotId, notify,
+    botErrors, getBotError,
   } = useApp();
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
@@ -43,19 +51,27 @@ export function OverviewPage() {
   const runningCount = bots.filter((bot) => isRunning(runtime?.bots[bot.id]?.status)).length;
   const uptime = state?.console.uptimeMs ?? health?.uptimeMs;
 
-  const runAction = async (bot: Bot, name: 'start' | 'stop' | 'restart') => {
+  const runAction = async (bot: Bot, name: BotAction) => {
     const key = bot.id + ':' + name;
     setBusyAction(key);
     try {
-      await api.action(name, { botId: bot.id });
-      notify('ok', '已请求' + (name === 'start' ? '启动' : name === 'stop' ? '停止' : '重启') + '：' + bot.name);
+      const result = await api.action(ACTION_NAME[name], { botId: bot.id });
       await reloadState();
+      if (result?.ok === false) {
+        await new Promise((resolve) => { window.setTimeout(resolve, 400); });
+        const sseError = getBotError(bot.id)
+          || '机器人状态置为 error，常见原因：未配置 QQ 凭据（appId/appSecret）、网络不可达；详见事件流或插件日志。';
+        notify('error', ACTION_VERB[name] + '未成功：' + bot.name, sseError);
+      } else {
+        notify('ok', ACTION_VERB[name] + '已提交：' + bot.name, summarizeActionResult(result));
+      }
     } catch (err) {
       const error = toApiError(err);
+      const feedback = actionFeedback(error);
       if (error.unimplemented) {
-        notify('info', '机器人启停能力将在宿主适配（M2）后接入', 'POST /api/actions/' + name);
+        notify('info', '动作接口尚未装配（deps.actions 未注入）', 'POST /api/actions/' + ACTION_NAME[name]);
       } else {
-        notify('error', '操作失败：' + error.message, error.code);
+        notify('error', ACTION_VERB[name] + '失败：' + feedback.message, feedback.detail);
       }
     } finally {
       setBusyAction(null);
@@ -82,27 +98,31 @@ export function OverviewPage() {
     {
       key: 'runtime',
       title: '运行状态',
-      width: '120px',
+      width: '210px',
       render: (bot) => {
         const info = runtimeTone(runtime?.bots[bot.id]?.status);
+        const lastError = botErrors[bot.id];
         return (
-          <span className="cell-inline">
-            <StatusDot tone={info.tone} pulse={info.tone === 'ok'} />
-            {info.label}
-          </span>
+          <div className="cell-stack">
+            <span className="cell-inline">
+              <StatusDot tone={info.tone} pulse={info.tone === 'ok'} />
+              {info.label}
+            </span>
+            {lastError ? <span className="cell-error" title={lastError}>{truncate(lastError, 46)}</span> : null}
+          </div>
         );
       },
     },
     {
       key: 'appId',
       title: 'QQ AppID',
-      width: '160px',
+      width: '150px',
       render: (bot) => <span className="mono cell-sub">{bot.appId || '—'}</span>,
     },
     {
       key: 'actions',
       title: '',
-      width: '196px',
+      width: '232px',
       align: 'right',
       render: (bot) => {
         const running = isRunning(runtime?.bots[bot.id]?.status);
@@ -116,6 +136,9 @@ export function OverviewPage() {
               onClick={() => void runAction(bot, running ? 'stop' : 'start')}
             >
               {busy ? '处理中…' : running ? '停止' : '启动'}
+            </button>
+            <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => void runAction(bot, 'restart')}>
+              重启
             </button>
             <button
               type="button"
@@ -168,7 +191,7 @@ export function OverviewPage() {
           <header className="panel-head">
             <div>
               <h2 className="panel-title">机器人与运行状态</h2>
-              <p className="panel-desc">启动/停止会写入运行状态并刷新快照；启停接口未接入时会有明确提示。</p>
+              <p className="panel-desc">启动/停止/重启直接调用 /api/actions，状态由 SSE 实时刷新；失败原因会显示在状态列与通知里。</p>
             </div>
             <div className="panel-tools">
               <button type="button" className="btn btn-sm" onClick={() => navigate('/bots')}>管理机器人</button>

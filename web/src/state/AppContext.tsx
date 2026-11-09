@@ -42,6 +42,9 @@ interface AppContextValue {
   activeProfile: Profile | null;
   sse: SseStatus;
   events: SseEvent[];
+  /** 最近一次 bot/status 事件里携带的启动错误（botId → error 文本）。 */
+  botErrors: Record<string, string>;
+  getBotError: (botId: string) => string | undefined;
   toasts: ToastItem[];
   notify: (kind: ToastKind, message: string, detail?: string) => void;
   dismissToast: (id: number) => void;
@@ -66,12 +69,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [botId, setBotIdState] = useState<string>(readStoredBot);
   const [sse, setSse] = useState<SseStatus>('connecting');
   const [events, setEvents] = useState<SseEvent[]>([]);
+  const [botErrors, setBotErrors] = useState<Record<string, string>>({});
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   const toastSeq = useRef(0);
   const authRef = useRef<AuthState>(auth);
   const stateTimer = useRef<number | null>(null);
   const botPicked = useRef(false);
+  const botErrorsRef = useRef<Record<string, string>>({});
 
   useEffect(() => { authRef.current = auth; }, [auth]);
 
@@ -98,6 +103,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLoadingState(false);
     }
   }, []);
+
+  /** bot/status 事件里带 error 时记下来（启动失败的真实原因只在这里）。 */
+  const applyBotStatus = useCallback((data: unknown) => {
+    if (!data || typeof data !== 'object') return;
+    const record = data as Record<string, unknown>;
+    const id = typeof record.botId === 'string' ? record.botId : '';
+    if (id === '') return;
+    const error = typeof record.error === 'string' ? record.error : '';
+    const status = typeof record.status === 'string' ? record.status : '';
+    const next = { ...botErrorsRef.current };
+    if (error !== '') next[id] = error;
+    else if (status === 'ready' || status === 'stopped' || status === 'starting') delete next[id];
+    else return;
+    botErrorsRef.current = next;
+    setBotErrors(next);
+  }, []);
+
+  const getBotError = useCallback((id: string) => botErrorsRef.current[id], []);
 
   const scheduleStateReload = useCallback(() => {
     if (stateTimer.current !== null) return;
@@ -175,6 +198,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const seq = (prev[0]?.seq ?? 0) + 1;
           return [{ seq, event: eventName, at: Date.now(), data }, ...prev].slice(0, 80);
         });
+        if (eventName === 'bot/status') applyBotStatus(data);
         if (eventName === 'bot/status' || eventName === 'job/progress') scheduleStateReload();
       };
       source.onmessage = handle('message');
@@ -197,7 +221,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (timer !== null) window.clearTimeout(timer);
       source?.close();
     };
-  }, [auth, scheduleStateReload]);
+  }, [auth, applyBotStatus, scheduleStateReload]);
 
   useEffect(() => () => {
     if (stateTimer.current !== null) window.clearTimeout(stateTimer.current);
@@ -255,12 +279,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AppContextValue>(() => ({
     auth, session, serverDown, health, state, stateError, loadingState, reloadState,
-    botId, setBotId, bots, bot, profiles, activeProfile, sse, events, toasts, notify, dismissToast,
-    signIn, signOut,
+    botId, setBotId, bots, bot, profiles, activeProfile, sse, events, botErrors, getBotError,
+    toasts, notify, dismissToast, signIn, signOut,
   }), [
     auth, session, serverDown, health, state, stateError, loadingState, reloadState,
-    botId, setBotId, bots, bot, profiles, activeProfile, sse, events, toasts, notify, dismissToast,
-    signIn, signOut,
+    botId, setBotId, bots, bot, profiles, activeProfile, sse, events, botErrors, getBotError,
+    toasts, notify, dismissToast, signIn, signOut,
   ]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

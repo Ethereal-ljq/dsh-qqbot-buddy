@@ -9,6 +9,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 
 import { api, toApiError, type ApiError } from '../api/client';
 import type { Memory, MemoryHit } from '../api/types';
+import { ActionError } from '../components/ActionError';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { DataTable, type Column } from '../components/DataTable';
 import { Drawer } from '../components/Drawer';
@@ -17,6 +18,7 @@ import { ErrorNote } from '../components/ErrorNote';
 import { Field } from '../components/Field';
 import { PageHeader } from '../components/PageHeader';
 import { Badge } from '../components/Status';
+import { actionFeedback } from '../lib/actions';
 import { fmtTimeSmart, searchModeLabel, searchModeTone, truncate } from '../lib/format';
 import { navigate } from '../router';
 import { useApp } from '../state/AppContext';
@@ -26,7 +28,15 @@ const KIND_LABEL: Record<string, string> = {
   fact: '事实',
   preference: '偏好',
   event: '事件',
+  relation: '关系',
   other: '其他',
+};
+
+/** /api/actions/extract 返回 ok:false 时的原因文案。 */
+const EXTRACT_REASON: Record<string, string> = {
+  'empty-transcript': '转录为空，没有可提炼内容；请粘贴一段对话，或等待对话轮次自动触发。',
+  busy: '该会话正在提炼中，请稍后再试。',
+  'invalid-args': '参数不合法：缺少 botId 或 peer。',
 };
 
 function kindLabel(kind?: string): string {
@@ -56,6 +66,14 @@ export function MemoryPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<Memory | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // 立即提炼（/api/actions/extract：旁路 LLM 从转录抽长期事实）
+  const [extractOpen, setExtractOpen] = useState(false);
+  const [extractPeer, setExtractPeer] = useState('');
+  const [extractTranscript, setExtractTranscript] = useState('');
+  const [extracting, setExtracting] = useState(false);
+  const [extractError, setExtractError] = useState<ApiError | null>(null);
+  const [extractNotice, setExtractNotice] = useState<string | null>(null);
 
   const rows = useMemo(() => {
     const items = memories.data ?? [];
@@ -118,6 +136,54 @@ export function MemoryPage() {
       setCreateError(toApiError(err).message);
     } finally {
       setCreating(false);
+    }
+  };
+
+  const openExtract = () => {
+    setExtractPeer('');
+    setExtractTranscript('');
+    setExtractError(null);
+    setExtractNotice(null);
+    setExtractOpen(true);
+  };
+
+  /** 手动提炼：POST /api/actions/extract {botId, peer, transcript}。 */
+  const submitExtract = async () => {
+    setExtracting(true);
+    setExtractError(null);
+    setExtractNotice(null);
+    try {
+      const result = await api.action('extract', {
+        botId,
+        peer: extractPeer.trim(),
+        transcript: extractTranscript,
+      });
+      const data = result as Record<string, unknown>;
+      if (data.ok === false) {
+        const reason = String(data.reason || '');
+        const rawError = typeof data.error === 'string' ? data.error : '';
+        const text = EXTRACT_REASON[reason] || rawError || '未提炼出内容（后端未返回更多信息）。';
+        setExtractNotice('未提炼：' + text);
+        notify('info', '未提炼：' + text);
+        return;
+      }
+      const facts = Number(data.facts) || 0;
+      const saved = Number(data.saved) || 0;
+      const created = Number(data.created) || 0;
+      const deduped = Number(data.deduped) || 0;
+      const text = '提炼完成：识别 ' + facts + ' 条事实，新增 ' + created + ' 条'
+        + (deduped > 0 ? '，去重 ' + deduped + ' 条' : '')
+        + (saved > 0 && saved !== facts ? '（入库 ' + saved + ' 条）' : '');
+      setExtractNotice(text);
+      notify('ok', text);
+      memories.reload();
+    } catch (err) {
+      const error = toApiError(err);
+      setExtractError(error);
+      const feedback = actionFeedback(error);
+      notify(error.unimplemented ? 'info' : 'error', '提炼失败：' + feedback.message, feedback.detail);
+    } finally {
+      setExtracting(false);
     }
   };
 
@@ -218,7 +284,12 @@ export function MemoryPage() {
       <PageHeader
         title="记忆"
         description={'当前机器人：' + (bot?.name || botId) + '。长期记忆按 bot 共享；写入会做近似去重，检索结果标注 fts / like 模式。'}
-        actions={<button type="button" className="btn btn-primary" onClick={openCreate}>新增记忆</button>}
+        actions={(
+          <div className="row-actions">
+            <button type="button" className="btn btn-ghost" onClick={openExtract}>立即提炼</button>
+            <button type="button" className="btn btn-primary" onClick={openCreate}>新增记忆</button>
+          </div>
+        )}
       />
 
       <section className="panel">
@@ -311,6 +382,59 @@ export function MemoryPage() {
           )}
         </div>
       </section>
+
+      <Drawer
+        open={extractOpen}
+        title="立即提炼"
+        subtitle="调用 /api/actions/extract（旁路 LLM），从对话转录中提炼长期事实；同一会话并发会返回 busy。"
+        onClose={() => { if (!extracting) setExtractOpen(false); }}
+        footer={(
+          <>
+            <button type="button" className="btn btn-ghost" disabled={extracting} onClick={() => setExtractOpen(false)}>关闭</button>
+            <button type="button" className="btn btn-primary" disabled={extracting} onClick={() => void submitExtract()}>
+              {extracting ? '提炼中…' : '开始提炼'}
+            </button>
+          </>
+        )}
+      >
+        <div className="form-stack">
+          <Field
+            label="来源会话 peer"
+            htmlFor="extract-peer"
+            help="留空时后端使用 console；也可以填 qq:group:123456 按群提炼。"
+          >
+            <input
+              id="extract-peer"
+              className="input mono"
+              value={extractPeer}
+              placeholder="（留空 = console）qq:group:123456"
+              onChange={(event) => setExtractPeer(event.target.value)}
+            />
+          </Field>
+          <Field
+            label="对话转录 transcript"
+            htmlFor="extract-transcript"
+            wide
+            help="可粘贴一段群聊/私聊记录（最多保留末尾 6000 字符）；留空时后端会返回 empty-transcript。"
+          >
+            <textarea
+              id="extract-transcript"
+              className="input textarea"
+              rows={10}
+              value={extractTranscript}
+              placeholder={'A: 周五晚上一起去吃火锅吗？\nB: 好啊，八点老地方。\nA: 记得带伞。'}
+              onChange={(event) => setExtractTranscript(event.target.value)}
+            />
+          </Field>
+
+          {extractNotice ? (
+            <div className={'note ' + (extractNotice.startsWith('未提炼') ? 'note-pending' : 'note-ok')}>
+              <span className="note-title">{extractNotice}</span>
+            </div>
+          ) : null}
+          {extractError ? <ActionError error={extractError} /> : null}
+        </div>
+      </Drawer>
 
       <Drawer
         open={createOpen}

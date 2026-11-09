@@ -24,12 +24,12 @@ npm --prefix web run build      # 先 tsc 类型检查，再产出 web/dist
 | 路由 | 页面 | 说明 |
 |---|---|---|
 | `#/overview` | 总览 | 全局快照、机器人运行状态、SSE 事件横条与最近事件 |
-| `#/bots` | 机器人 | Bot CRUD、启停、独立工作目录 |
+| `#/bots` | 机器人 | Bot CRUD、启停/重启、详情（重置会话）、独立工作目录 |
 | `#/profiles` | 配置档与绑定 | Profile 列表/编辑、作用域绑定（scope → profile，priority） |
 | `#/settings` | 设置 | **完全由 `GET /api/schema` 渲染**，按 scope 自动分流 global/bot/profile 层 |
 | `#/tools` | 工具与技能 | 宿主发现项 + Profile 级白名单/黑名单、技能白名单 |
-| `#/knowledge` | 知识库 | 文档列表、Markdown 入库、FTS/LIKE 检索验证 |
-| `#/memory` | 记忆 | bot 级长期记忆：列表、录入、检索、删除 |
+| `#/knowledge` | 知识库 | 文档列表、文本入库、URL 抓取入库、FTS/LIKE 检索验证 |
+| `#/memory` | 记忆 | bot 级长期记忆：列表、录入、检索、删除、立即提炼（/api/actions/extract） |
 | `#/members` | 群友库 | openid/昵称/备注/画像 JSON |
 | `#/personas` | 人格卡 | 人设卡 CRUD、激活（同步 persona.md） |
 | `#/stickers` | 表情包 | 路径登记、emotion 标签、当日发送量 |
@@ -41,4 +41,6 @@ npm --prefix web run build      # 先 tsc 类型检查，再产出 web/dist
 - 所有请求带 cookie，非 GET 自动附加 `X-QQBot-CSRF: 1`；401 统一广播到登录页。
 - 404 / 501 视为“后端能力尚未接入”，页面显示空态而不是报错。
 - SSE `/api/events` 断线指数退避重连；`bot/status`、`job/progress` 事件会触发快照刷新。
+- 运行时动作统一走 `POST /api/actions/:name`：机器人启停/重启/重置会话、URL 入库、记忆提炼、刷新工具发现。
+  错误码（TIMEOUT / TOO_LARGE / SSRF_BLOCKED / action_failed…）由 `src/lib/actions.ts` 映射成中文提示。
 - 视觉：石墨绿中性色 + 单一信号色，深色跟随系统（CSS 变量），等宽字体用于 ID/JSON。

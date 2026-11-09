@@ -1,25 +1,36 @@
 /**
- * pages/BotsPage —— 机器人管理：列表、新建/编辑抽屉、启停与删除。
+ * pages/BotsPage —— 机器人管理：列表、新建/编辑抽屉、启停/重启、详情与会话重置。
  *
- * Bot 是 QQ 应用本体 + 独立工作目录；创建时服务端会同时建默认配置档。
+ * 动作接口（M1b，deps.actions.run）：
+ *  - POST /api/actions/start-bot | stop-bot | restart-bot  body {botId}
+ *  - POST /api/actions/reset-peer  body {botId, peer}（轮换会话 epoch，下次消息建新会话）
+ * start 失败时宿主只返回 {ok:false}，真实原因在 bot/status 事件的 error 里（AppContext.botErrors）。
  * 注意 appSecret 只写不读：列表只返回 hasSecret，编辑时留空表示不修改。
  */
 import { useMemo, useState } from 'react';
 
-import { api, toApiError } from '../api/client';
+import { ApiError, api, toApiError } from '../api/client';
 import type { Bot } from '../api/types';
+import { ActionError } from '../components/ActionError';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { CopyButton } from '../components/CopyButton';
 import { DataTable, type Column } from '../components/DataTable';
 import { Drawer } from '../components/Drawer';
-import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorNote } from '../components/ErrorNote';
 import { Field } from '../components/Field';
 import { PageHeader } from '../components/PageHeader';
 import { Badge, StatusDot, runtimeTone } from '../components/Status';
-import { fmtTimeSmart } from '../lib/format';
+import { actionFeedback, summarizeActionResult } from '../lib/actions';
+import { fmtTimeSmart, truncate } from '../lib/format';
 import { navigate } from '../router';
 import { useApp } from '../state/AppContext';
+
+type BotAction = 'start' | 'stop' | 'restart';
+
+const ACTION_NAME: Record<BotAction, string> = { start: 'start-bot', stop: 'stop-bot', restart: 'restart-bot' };
+const ACTION_VERB: Record<BotAction, string> = { start: '启动', stop: '停止', restart: '重启' };
+const RUNNING_STATUS = new Set(['online', 'running', 'ready', 'connected', 'starting']);
 
 interface BotForm {
   name: string;
@@ -31,10 +42,14 @@ interface BotForm {
 
 const EMPTY_FORM: BotForm = { name: '', appId: '', appSecret: '', cwd: '', enabled: true };
 
-const RUNNING_STATUS = new Set(['online', 'running', 'ready', 'connected', 'starting']);
+function isRunning(status?: string): boolean {
+  return RUNNING_STATUS.has((status || '').toLowerCase());
+}
 
 export function BotsPage() {
-  const { state, stateError, loadingState, reloadState, botId, setBotId, notify } = useApp();
+  const {
+    state, stateError, loadingState, reloadState, botId, setBotId, notify, botErrors, getBotError,
+  } = useApp();
   const [filter, setFilter] = useState('');
   const [drawer, setDrawer] = useState<{ mode: 'create' | 'edit'; bot: Bot | null } | null>(null);
   const [form, setForm] = useState<BotForm>(EMPTY_FORM);
@@ -42,7 +57,15 @@ export function BotsPage() {
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Bot | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
+
+  // 详情 / 会话操作
+  const [detailBot, setDetailBot] = useState<Bot | null>(null);
+  const [peer, setPeer] = useState('');
+  const [detailBusy, setDetailBusy] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<ApiError | null>(null);
+  const [detailNotice, setDetailNotice] = useState<string | null>(null);
+  const [resetResult, setResetResult] = useState<string | null>(null);
 
   const bots = state?.bots ?? [];
   const runtime = state?.runtime;
@@ -54,6 +77,9 @@ export function BotsPage() {
       [bot.name, bot.id, bot.appId, bot.cwd || ''].some((field) => field.toLowerCase().includes(keyword)),
     );
   }, [bots, filter]);
+
+  const detail = detailBot ? bots.find((bot) => bot.id === detailBot.id) ?? detailBot : null;
+  const detailRunning = isRunning(detail ? runtime?.bots[detail.id]?.status : undefined);
 
   const openCreate = () => {
     setForm(EMPTY_FORM);
@@ -71,6 +97,14 @@ export function BotsPage() {
     });
     setFormError(null);
     setDrawer({ mode: 'edit', bot });
+  };
+
+  const openDetail = (bot: Bot) => {
+    setDetailBot(bot);
+    setPeer('');
+    setDetailError(null);
+    setDetailNotice(null);
+    setResetResult(null);
   };
 
   const save = async () => {
@@ -120,6 +154,7 @@ export function BotsPage() {
         const next = bots.find((bot) => bot.id !== deleteTarget.id)?.id ?? '';
         setBotId(next);
       }
+      if (detailBot?.id === deleteTarget.id) setDetailBot(null);
       setDeleteTarget(null);
       await reloadState();
     } catch (err) {
@@ -130,22 +165,70 @@ export function BotsPage() {
     }
   };
 
-  const runAction = async (bot: Bot, name: 'start' | 'stop') => {
-    const key = bot.id + ':' + name;
-    setBusyKey(key);
+  /** 执行启停/重启；ok:false 时从 SSE bot/status 的 error 取真实原因。 */
+  const runBotAction = async (bot: Bot, action: BotAction, options: { detail?: boolean } = {}) => {
+    const inDetail = options.detail === true;
+    if (inDetail) setDetailBusy(action);
+    else setRowBusy(bot.id + ':' + action);
+    if (inDetail) {
+      setDetailError(null);
+      setDetailNotice(null);
+    }
     try {
-      await api.action(name, { botId: bot.id });
-      notify('ok', '已请求' + (name === 'start' ? '启动' : '停止') + '：' + bot.name);
+      const result = await api.action(ACTION_NAME[action], { botId: bot.id });
+      const ok = result?.ok !== false;
+      await reloadState();
+      if (ok) {
+        const summary = summarizeActionResult(result);
+        if (inDetail) setDetailNotice(ACTION_VERB[action] + '已提交' + (summary && summary !== 'ok=true' ? ' · ' + summary : ''));
+        notify('ok', ACTION_VERB[action] + '已提交：' + bot.name, summary !== 'ok=true' ? summary : undefined);
+      } else {
+        // 宿主启动失败会先返回 {ok:false}，可读原因随 bot/status 事件到达
+        await new Promise((resolve) => { window.setTimeout(resolve, 400); });
+        const sseError = getBotError(bot.id);
+        const hint = sseError
+          || '机器人状态置为 error，常见原因：未配置 QQ 凭据（appId/appSecret）、网络不可达；详见事件流或插件日志。';
+        if (inDetail) setDetailNotice(ACTION_VERB[action] + '未成功：' + hint);
+        notify('error', ACTION_VERB[action] + '未成功：' + bot.name, hint);
+      }
+    } catch (err) {
+      const error = toApiError(err);
+      const feedback = actionFeedback(error);
+      if (inDetail) setDetailError(error);
+      if (error.unimplemented) {
+        notify('info', '动作接口尚未装配（deps.actions 未注入）', 'POST /api/actions/' + ACTION_NAME[action]);
+      } else {
+        notify('error', ACTION_VERB[action] + '失败：' + feedback.message, feedback.detail);
+      }
+    } finally {
+      if (inDetail) setDetailBusy(null);
+      else setRowBusy(null);
+    }
+  };
+
+  const resetPeer = async () => {
+    if (!detail) return;
+    const value = peer.trim();
+    if (value === '') {
+      setDetailError(new ApiError('请先填写要重置的会话 peer', { status: 0, code: 'invalid_peer', url: '' }));
+      return;
+    }
+    setDetailBusy('reset-peer');
+    setDetailError(null);
+    setDetailNotice(null);
+    setResetResult(null);
+    try {
+      const result = await api.action('reset-peer', { botId: detail.id, peer: value });
+      setResetResult(summarizeActionResult(result));
+      notify('ok', '会话已重置：' + value, summarizeActionResult(result));
       await reloadState();
     } catch (err) {
       const error = toApiError(err);
-      if (error.unimplemented) {
-        notify('info', '机器人启停能力将在宿主适配（M2）后接入', 'POST /api/actions/' + name);
-      } else {
-        notify('error', '操作失败：' + error.message, error.code);
-      }
+      setDetailError(error);
+      const feedback = actionFeedback(error);
+      notify(error.unimplemented ? 'info' : 'error', '重置会话失败：' + feedback.message, feedback.detail);
     } finally {
-      setBusyKey(null);
+      setDetailBusy(null);
     }
   };
 
@@ -163,7 +246,7 @@ export function BotsPage() {
     {
       key: 'appId',
       title: 'QQ 应用',
-      width: '196px',
+      width: '190px',
       render: (bot) => (
         <div className="cell-stack">
           <span className="mono">{bot.appId || '未填写'}</span>
@@ -181,13 +264,18 @@ export function BotsPage() {
     {
       key: 'status',
       title: '状态',
-      width: '124px',
+      width: '190px',
       render: (bot) => {
         const info = runtimeTone(runtime?.bots[bot.id]?.status);
+        const lastError = botErrors[bot.id];
         return (
           <div className="cell-stack">
             <span className="cell-inline"><StatusDot tone={info.tone} pulse={info.tone === 'ok'} />{info.label}</span>
-            <span className="cell-sub">{bot.enabled ? '允许启动' : '已停用'}</span>
+            {lastError ? (
+              <span className="cell-error" title={lastError}>{truncate(lastError, 42)}</span>
+            ) : (
+              <span className="cell-sub">{bot.enabled ? '允许启动' : '已停用'}</span>
+            )}
           </div>
         );
       },
@@ -195,35 +283,32 @@ export function BotsPage() {
     {
       key: 'updatedAt',
       title: '更新时间',
-      width: '136px',
+      width: '130px',
       render: (bot) => <span className="mono cell-sub">{fmtTimeSmart(bot.updatedAt)}</span>,
     },
     {
       key: 'actions',
       title: '',
-      width: '248px',
+      width: '300px',
       align: 'right',
       render: (bot) => {
-        const running = RUNNING_STATUS.has((runtime?.bots[bot.id]?.status || '').toLowerCase());
-        const busy = busyKey?.startsWith(bot.id + ':') ?? false;
+        const running = isRunning(runtime?.bots[bot.id]?.status);
+        const busy = rowBusy?.startsWith(bot.id + ':') ?? false;
         return (
           <div className="row-actions">
             <button
               type="button"
               className="btn btn-sm btn-ghost"
               disabled={busy}
-              onClick={() => void runAction(bot, running ? 'stop' : 'start')}
+              onClick={() => void runBotAction(bot, running ? 'stop' : 'start')}
             >
-              {busy ? '…' : running ? '停止' : '启动'}
+              {busy ? '处理中…' : running ? '停止' : '启动'}
             </button>
+            <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => void runBotAction(bot, 'restart')}>
+              重启
+            </button>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => openDetail(bot)}>详情</button>
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => openEdit(bot)}>编辑</button>
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={() => { setBotId(bot.id); navigate('/profiles'); }}
-            >
-              配置档
-            </button>
             <button type="button" className="btn btn-sm btn-danger-text" onClick={() => setDeleteTarget(bot)}>删除</button>
           </div>
         );
@@ -235,7 +320,7 @@ export function BotsPage() {
     <div className="page">
       <PageHeader
         title="机器人"
-        description="每个机器人是一个 QQ 应用 + 独立工作目录 + 独立数据（记忆/知识库/群友库/表情包）。"
+        description="每个机器人是一个 QQ 应用 + 独立工作目录 + 独立数据。启停/重启与重置会话走 /api/actions，状态由 SSE 实时刷新。"
         actions={<button type="button" className="btn btn-primary" onClick={openCreate}>新建机器人</button>}
       />
 
@@ -287,6 +372,7 @@ export function BotsPage() {
         </div>
       </section>
 
+      {/* 新建 / 编辑 */}
       <Drawer
         open={drawer !== null}
         title={drawer?.mode === 'edit' ? '编辑机器人' : '新建机器人'}
@@ -367,6 +453,124 @@ export function BotsPage() {
 
           {formError ? <p className="field-error" role="alert">{formError}</p> : null}
         </div>
+      </Drawer>
+
+      {/* 详情 / 会话操作 */}
+      <Drawer
+        open={detail !== null}
+        title={'机器人 · ' + (detail?.name || '')}
+        subtitle={detail?.id}
+        width={520}
+        onClose={() => setDetailBot(null)}
+        footer={<button type="button" className="btn btn-ghost" onClick={() => setDetailBot(null)}>关闭</button>}
+      >
+        {detail ? (
+          <div className="form-stack">
+            <section className="detail-section">
+              <h3 className="subsection-title">运行控制</h3>
+              <p className="field-help">
+                动作走 /api/actions；启动失败时真实原因来自 SSE 的 bot/status 事件（例如未配置 QQ 凭据）。
+              </p>
+              <div className="cell-inline">
+                <StatusDot tone={runtimeTone(runtime?.bots[detail.id]?.status).tone} pulse={detailRunning} />
+                <span>{runtimeTone(runtime?.bots[detail.id]?.status).label}</span>
+                {detail.enabled ? <Badge tone="ok">允许启动</Badge> : <Badge tone="idle">已停用</Badge>}
+              </div>
+              <div className="row-actions detail-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={detailBusy !== null || detailRunning}
+                  onClick={() => void runBotAction(detail, 'start', { detail: true })}
+                >
+                  {detailBusy === 'start' ? '启动中…' : '启动'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={detailBusy !== null || !detailRunning}
+                  onClick={() => void runBotAction(detail, 'stop', { detail: true })}
+                >
+                  {detailBusy === 'stop' ? '停止中…' : '停止'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={detailBusy !== null}
+                  onClick={() => void runBotAction(detail, 'restart', { detail: true })}
+                >
+                  {detailBusy === 'restart' ? '重启中…' : '重启'}
+                </button>
+              </div>
+              {botErrors[detail.id] ? (
+                <div className="note note-error">
+                  <span className="note-title">最近启动错误</span>
+                  <span className="note-text mono">{botErrors[detail.id]}</span>
+                </div>
+              ) : null}
+              {detailNotice ? <div className="note note-pending"><span className="note-text">{detailNotice}</span></div> : null}
+              {detailError ? <ActionError error={detailError} /> : null}
+            </section>
+
+            <section className="detail-section">
+              <h3 className="subsection-title">重置会话</h3>
+              <p className="field-help">
+                轮换该 peer 的会话 epoch：下一次消息会创建全新会话，旧会话的持久化记录仍可恢复。peer 形如
+                <code className="inline-code mono"> qq:group:123456</code> 或 <code className="inline-code mono">qq:c2c:OPENID</code>。
+              </p>
+              <Field label="会话 peer" htmlFor="reset-peer" required>
+                <input
+                  id="reset-peer"
+                  className="input mono"
+                  value={peer}
+                  placeholder="qq:group:123456"
+                  onChange={(event) => setPeer(event.target.value)}
+                />
+              </Field>
+              <div className="row-actions detail-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={detailBusy !== null || peer.trim() === ''}
+                  onClick={() => void resetPeer()}
+                >
+                  {detailBusy === 'reset-peer' ? '重置中…' : '重置会话'}
+                </button>
+              </div>
+              {resetResult ? <div className="result-box mono">{resetResult}</div> : null}
+            </section>
+
+            <section className="detail-section">
+              <h3 className="subsection-title">基础信息</h3>
+              <dl className="kv">
+                <div className="kv-row"><dt>QQ AppID</dt><dd className="mono">{detail.appId || '—'}</dd></div>
+                <div className="kv-row"><dt>AppSecret</dt><dd>{detail.hasSecret ? '已配置（不回显）' : '未配置'}</dd></div>
+                <div className="kv-row"><dt>工作目录</dt><dd className="mono ellipsis" title={detail.cwd || ''}>{detail.cwd || '—'}</dd></div>
+                <div className="kv-row"><dt>更新时间</dt><dd className="mono">{fmtTimeSmart(detail.updatedAt)}</dd></div>
+              </dl>
+              <div className="row-actions detail-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    setDetailBot(null);
+                    setBotId(detail.id);
+                    navigate('/profiles');
+                  }}
+                >
+                  配置档与绑定
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => { const target = detail; setDetailBot(null); openEdit(target); }}
+                >
+                  编辑机器人
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
       </Drawer>
 
       <ConfirmDialog

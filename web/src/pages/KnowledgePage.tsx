@@ -17,7 +17,8 @@ import { ErrorNote } from '../components/ErrorNote';
 import { Field } from '../components/Field';
 import { PageHeader } from '../components/PageHeader';
 import { Badge } from '../components/Status';
-import { fmtNumber, fmtTimeSmart, searchModeLabel, searchModeTone, truncate } from '../lib/format';
+import { actionFeedback } from '../lib/actions';
+import { fmtBytes, fmtNumber, fmtTimeSmart, searchModeLabel, searchModeTone, truncate } from '../lib/format';
 import { navigate } from '../router';
 import { useApp } from '../state/AppContext';
 import { useApi } from '../state/useApi';
@@ -33,8 +34,10 @@ export function KnowledgePage() {
   const [searching, setSearching] = useState(false);
 
   const [ingestOpen, setIngestOpen] = useState(false);
-  const [form, setForm] = useState({ source: '', title: '', text: '' });
+  const [ingestMode, setIngestMode] = useState<'text' | 'url'>('text');
+  const [form, setForm] = useState({ source: '', title: '', text: '', url: '' });
   const [ingestError, setIngestError] = useState<string | null>(null);
+  const [ingestErrorDetail, setIngestErrorDetail] = useState<string | null>(null);
   const [ingesting, setIngesting] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<KbDoc | null>(null);
@@ -70,19 +73,65 @@ export function KnowledgePage() {
     }
   };
 
-  const openIngest = () => {
-    setForm({ source: '', title: '', text: '' });
+  const openIngest = (mode: 'text' | 'url') => {
+    setIngestMode(mode);
+    setForm({ source: '', title: '', text: '', url: '' });
     setIngestError(null);
+    setIngestErrorDetail(null);
     setIngestOpen(true);
   };
 
+  /** URL 入库：走 /api/actions/ingest-url（SSRF/超时/大小限制在 core/kb/ingest-url）。 */
+  const submitUrlIngest = async () => {
+    const url = form.url.trim();
+    if (url === '') {
+      setIngestError('请填写目标 URL（http/https 开头）。');
+      return;
+    }
+    setIngesting(true);
+    setIngestError(null);
+    setIngestErrorDetail(null);
+    try {
+      const result = await api.action('ingest-url', {
+        botId,
+        url,
+        ...(form.title.trim() !== '' ? { title: form.title.trim() } : {}),
+      });
+      const data = result as Record<string, unknown>;
+      const docId = Number(data.docId);
+      const chunks = Number(data.chunks) || 0;
+      const bytes = Number(data.bytes);
+      const changed = data.changed !== false;
+      const detail = 'docId=' + (Number.isFinite(docId) ? docId : '—')
+        + ' · ' + chunks + ' 个分块'
+        + (Number.isFinite(bytes) && bytes > 0 ? ' · ' + fmtBytes(bytes) : '');
+      notify(changed ? 'ok' : 'info', changed ? 'URL 入库完成' : 'URL 内容未变化（hash 相同，已幂等跳过）', detail);
+      setIngestOpen(false);
+      docs.reload();
+      await reloadState();
+    } catch (err) {
+      const error = toApiError(err);
+      const feedback = actionFeedback(error);
+      setIngestError(error.unimplemented ? 'URL 入库动作尚未装配（deps.actions 未注入）。' : feedback.message);
+      setIngestErrorDetail(feedback.detail ?? null);
+      notify(error.unimplemented ? 'info' : 'error', 'URL 入库失败：' + feedback.message, feedback.detail);
+    } finally {
+      setIngesting(false);
+    }
+  };
+
   const submitIngest = async () => {
+    if (ingestMode === 'url') {
+      await submitUrlIngest();
+      return;
+    }
     if (form.text.trim() === '') {
       setIngestError('文档内容不能为空；粘贴 Markdown 或纯文本。');
       return;
     }
     setIngesting(true);
     setIngestError(null);
+    setIngestErrorDetail(null);
     try {
       const result = await api.ingestKb({
         botId,
@@ -100,6 +149,7 @@ export function KnowledgePage() {
         setIngestError('知识库内核尚未装配（M4），入库接口返回 501。');
       } else {
         setIngestError(error.message);
+        setIngestErrorDetail(error.code + (error.requestId ? ' · requestId ' + error.requestId : ''));
       }
     } finally {
       setIngesting(false);
@@ -197,7 +247,12 @@ export function KnowledgePage() {
       <PageHeader
         title="知识库"
         description={'当前机器人：' + (bot?.name || botId) + '。Markdown 标题优先分块，FTS5 trigram 检索；短查询自动回退 LIKE。'}
-        actions={<button type="button" className="btn btn-primary" onClick={openIngest}>入库文档</button>}
+        actions={(
+          <div className="row-actions">
+            <button type="button" className="btn btn-ghost" onClick={() => openIngest('url')}>URL 入库</button>
+            <button type="button" className="btn btn-primary" onClick={() => openIngest('text')}>入库文档</button>
+          </div>
+        )}
       />
 
       <section className="panel">
@@ -301,7 +356,7 @@ export function KnowledgePage() {
                   description={filter ? '换个关键词试试。' : '粘贴 Markdown 入库；标题会优先成为分块边界。'}
                   action={filter
                     ? <button type="button" className="btn btn-sm" onClick={() => setFilter('')}>清空过滤</button>
-                    : <button type="button" className="btn btn-primary btn-sm" onClick={openIngest}>入库第一篇文档</button>}
+                    : <button type="button" className="btn btn-primary btn-sm" onClick={() => openIngest('text')}>入库第一篇文档</button>}
                 />
               )}
             />
@@ -311,48 +366,104 @@ export function KnowledgePage() {
 
       <Drawer
         open={ingestOpen}
-        title="入库文档"
-        subtitle="同一 source 重入会替换旧文档；内容 hash 相同则视为无变化。"
+        title={ingestMode === 'url' ? '从 URL 入库' : '入库文档'}
+        subtitle={ingestMode === 'url'
+          ? '抓取网页并抽取正文；同 URL 重复抓取按 hash 幂等'
+          : '同一 source 重入会替换旧文档；内容 hash 相同则视为无变化。'}
         onClose={() => { if (!ingesting) setIngestOpen(false); }}
         footer={(
           <>
             <button type="button" className="btn btn-ghost" disabled={ingesting} onClick={() => setIngestOpen(false)}>取消</button>
             <button type="button" className="btn btn-primary" disabled={ingesting} onClick={() => void submitIngest()}>
-              {ingesting ? '入库中…' : '入库'}
+              {ingesting ? (ingestMode === 'url' ? '抓取中…' : '入库中…') : (ingestMode === 'url' ? '抓取并入库' : '入库')}
             </button>
           </>
         )}
       >
         <div className="form-stack">
-          <Field label="来源标识 source" htmlFor="kb-source" help="唯一标识（文件路径 / URL / 自定义 id），用于幂等重入。留空由服务端生成。">
-            <input
-              id="kb-source"
-              className="input mono"
-              value={form.source}
-              placeholder="docs/faq.md 或 https://example.com/doc"
-              onChange={(event) => setForm({ ...form, source: event.target.value })}
-            />
-          </Field>
-          <Field label="标题" htmlFor="kb-title" help="留空时从 Markdown 一级标题或 source 推断。">
-            <input
-              id="kb-title"
-              className="input"
-              value={form.title}
-              placeholder="例如：客服 FAQ"
-              onChange={(event) => setForm({ ...form, title: event.target.value })}
-            />
-          </Field>
-          <Field label="内容（Markdown / 纯文本）" htmlFor="kb-text" required wide>
-            <textarea
-              id="kb-text"
-              className="input textarea mono kb-textarea"
-              rows={12}
-              value={form.text}
-              placeholder={'# 标题\n\n正文…\n\n## 小节\n\n按 Markdown 标题优先切块，超长段落按 800 字符滑窗。'}
-              onChange={(event) => setForm({ ...form, text: event.target.value })}
-            />
-          </Field>
-          {ingestError ? <p className="field-error" role="alert">{ingestError}</p> : null}
+          <div className="segmented" role="group" aria-label="入库方式">
+            <button
+              type="button"
+              className={'seg-btn' + (ingestMode === 'text' ? ' active' : '')}
+              disabled={ingesting}
+              onClick={() => setIngestMode('text')}
+            >
+              粘贴文本
+            </button>
+            <button
+              type="button"
+              className={'seg-btn' + (ingestMode === 'url' ? ' active' : '')}
+              disabled={ingesting}
+              onClick={() => setIngestMode('url')}
+            >
+              从 URL 抓取
+            </button>
+          </div>
+
+          {ingestMode === 'url' ? (
+            <>
+              <Field label="目标 URL" htmlFor="kb-url" required help="仅支持公网 http/https；默认 2 MiB 上限、15 秒超时，内网/本机地址会被 SSRF 防护拒绝。">
+                <input
+                  id="kb-url"
+                  className="input mono"
+                  value={form.url}
+                  placeholder="https://example.com/docs/faq"
+                  onChange={(event) => setForm({ ...form, url: event.target.value })}
+                />
+              </Field>
+              <Field label="标题（可选）" htmlFor="kb-title" help="留空时优先取 HTML <title>，其次用 URL 末段。">
+                <input
+                  id="kb-title"
+                  className="input"
+                  value={form.title}
+                  placeholder="例如：客服 FAQ"
+                  onChange={(event) => setForm({ ...form, title: event.target.value })}
+                />
+              </Field>
+              <div className="hint-strip">
+                <span className="hint-label">限制</span>
+                <span className="hint-text">仅 HTML / 纯文本 / JSON；重定向最多 3 次；失败时按后端 error.code 给出可读原因。</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <Field label="来源标识 source" htmlFor="kb-source" help="唯一标识（文件路径 / URL / 自定义 id），用于幂等重入。留空由服务端生成。">
+                <input
+                  id="kb-source"
+                  className="input mono"
+                  value={form.source}
+                  placeholder="docs/faq.md 或 https://example.com/doc"
+                  onChange={(event) => setForm({ ...form, source: event.target.value })}
+                />
+              </Field>
+              <Field label="标题" htmlFor="kb-title" help="留空时从 Markdown 一级标题或 source 推断。">
+                <input
+                  id="kb-title"
+                  className="input"
+                  value={form.title}
+                  placeholder="例如：客服 FAQ"
+                  onChange={(event) => setForm({ ...form, title: event.target.value })}
+                />
+              </Field>
+              <Field label="内容（Markdown / 纯文本）" htmlFor="kb-text" required wide>
+                <textarea
+                  id="kb-text"
+                  className="input textarea mono kb-textarea"
+                  rows={12}
+                  value={form.text}
+                  placeholder={'# 标题\n\n正文…\n\n## 小节\n\n按 Markdown 标题优先切块，超长段落按 800 字符滑窗。'}
+                  onChange={(event) => setForm({ ...form, text: event.target.value })}
+                />
+              </Field>
+            </>
+          )}
+
+          {ingestError ? (
+            <div className="note note-error" role="alert">
+              <span className="note-title">{ingestError}</span>
+              {ingestErrorDetail ? <span className="note-meta mono">{ingestErrorDetail}</span> : null}
+            </div>
+          ) : null}
         </div>
       </Drawer>
 

@@ -84,6 +84,14 @@ export function prettyJson(value: unknown): string {
   }
 }
 
+/** 字节数 → 可读大小（B / KiB / MiB）。 */
+export function fmtBytes(value?: number | null): string {
+  if (value === undefined || value === null || !Number.isFinite(value) || value < 0) return '—';
+  if (value < 1024) return value + ' B';
+  if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KiB';
+  return (value / (1024 * 1024)).toFixed(2) + ' MiB';
+}
+
 /** 数字千分位。 */
 export function fmtNumber(value?: number | null): string {
   if (value === undefined || value === null || !Number.isFinite(value)) return '—';
