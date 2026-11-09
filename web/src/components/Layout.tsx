@@ -152,6 +152,17 @@ export function Layout({ path, children }: { path: string; children: ReactNode }
               <StatusDot tone={sse === 'live' ? 'ok' : sse === 'connecting' ? 'warn' : 'danger'} pulse={sse === 'live'} />
               <span className="sse-text">{sse === 'live' ? '实时' : sse === 'connecting' ? '连接中' : '断开'}</span>
             </span>
+            {state?.dshWeb?.url ? (
+              <a
+                className="btn btn-ghost btn-sm dsh-web-btn"
+                href={state.dshWeb.url}
+                target="_blank"
+                rel="noreferrer"
+                title="在新标签页打开 dsh Web 界面（链接已带本进程的鉴权 token，重启 dsh 后需重新获取）"
+              >
+                dsh Web ↗
+              </a>
+            ) : null}
             <button
               type="button"
               className={'btn btn-ghost btn-sm refresh-btn' + (loadingState ? ' busy' : '')}

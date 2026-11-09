@@ -81,6 +81,13 @@ export interface ConsoleInfo {
   port?: number;
 }
 
+/** dsh Web 入口（带鉴权 token 的 URL；控制台顶栏按钮用）。 */
+export interface DshWebInfo {
+  url: string;
+  ready: boolean;
+  error?: string;
+}
+
 export interface StateSnapshot {
   version: string;
   online: boolean;
@@ -90,6 +97,7 @@ export interface StateSnapshot {
   activeProfiles: Record<string, string>;
   console: ConsoleInfo;
   runtime: { online: boolean; bots: Record<string, BotRuntime> };
+  dshWeb?: DshWebInfo | null;
 }
 
 /** 设置项 UI 元数据（GET /api/schema）。 */

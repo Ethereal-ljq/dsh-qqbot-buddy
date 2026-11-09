@@ -138,6 +138,15 @@ export function normState(raw: unknown): StateSnapshot {
     host: val(consoleRaw, 'host') === undefined ? undefined : str(val(consoleRaw, 'host')),
     port: val(consoleRaw, 'port') === undefined ? undefined : num(val(consoleRaw, 'port')),
   };
+  const dshWebRaw = val(r, 'dshWeb', 'dsh_web');
+  const dshWeb = dshWebRaw === undefined || dshWebRaw === null ? null : (() => {
+    const item = rec(dshWebRaw);
+    return {
+      url: str(val(item, 'url'), ''),
+      ready: bool(val(item, 'ready'), false),
+      error: str(val(item, 'error'), ''),
+    };
+  })();
   return {
     version: str(val(r, 'version'), ''),
     online: bool(val(r, 'online'), true),
@@ -147,6 +156,7 @@ export function normState(raw: unknown): StateSnapshot {
     activeProfiles,
     console: consoleInfo,
     runtime: { online: bool(val(runtime, 'online'), false), bots },
+    dshWeb,
   };
 }
 
