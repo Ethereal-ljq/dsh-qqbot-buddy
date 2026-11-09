@@ -1391,6 +1391,9 @@ a { color: inherit; }
   transition: transform 120ms ease;
 }
 .prompt-section[open] .prompt-section-head::before { transform: rotate(90deg); }
+.prompt-section-head.is-empty .prompt-section-name { color: var(--ink-3); }
+.prompt-section-head.is-empty .prompt-section-label { color: var(--ink-3); }
+.prompt-empty-tag { height: 15px; font-size: 9px; color: var(--ink-3); }
 .prompt-section-name { font-size: 11px; color: var(--ink); }
 .prompt-section-label { font-size: 11.5px; color: var(--ink-2); }
 .prompt-section-chars { margin-left: auto; font-size: 10px; color: var(--ink-3); }

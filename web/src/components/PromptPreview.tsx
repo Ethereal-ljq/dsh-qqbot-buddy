@@ -157,9 +157,10 @@ export function PromptPreview({ botId, profileId, profileName, hasUnsavedChanges
             <div className="prompt-sections">
               {data.sections.map((section: PromptSection, index: number) => (
                 <details className="prompt-section" key={section.name + '-' + index} open={index === 0}>
-                  <summary className="prompt-section-head">
+                  <summary className={'prompt-section-head' + (section.empty ? ' is-empty' : '')}>
                     <span className="prompt-section-name mono">{section.name}</span>
                     <span className="prompt-section-label">{section.label}</span>
+                    {section.empty ? <span className="tag prompt-empty-tag">空段</span> : null}
                     <span className="prompt-section-chars mono">{section.chars} 字符</span>
                     <button
                       type="button"

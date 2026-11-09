@@ -311,6 +311,7 @@ function normPromptSection(raw: unknown): PromptSection {
     label: str(val(r, 'label'), str(val(r, 'name'))),
     text,
     chars: num(val(r, 'chars'), Array.from(text).length),
+    empty: val(r, 'empty') === undefined ? text.trim() === '' : bool(val(r, 'empty')),
   };
 }
 

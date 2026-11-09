@@ -297,6 +297,8 @@ export interface PromptSection {
   label: string;
   text: string;
   chars: number;
+  /** 后端标记的空段（例如 query 为空时的 memory/knowledge）。 */
+  empty?: boolean;
 }
 
 /**
