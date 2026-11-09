@@ -30,6 +30,7 @@
  * 退出码：0 = 冷会话一致；1 = 探针失败/断言不一致；2 = 环境/启动失败。
  */
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -155,14 +156,27 @@ async function captureSnapshot(host, agent) {
       rendered: truncate(renderSectionText(raw, variables), 400),
     });
   }
+  const session = agent && agent.session ? agent.session : null;
+  const variableValues = {};
+  for (const [variableName, value] of Object.entries(variables)) {
+    variableValues[variableName] = {
+      type: typeof value,
+      chars: typeof value === 'string' ? value.length : null,
+      preview: typeof value === 'string' ? truncate(value, 160) : '',
+    };
+  }
   return {
     at: new Date().toISOString(),
-    sessionId: agent && agent.session && agent.session.id !== undefined ? String(agent.session.id) : '',
+    sessionId: session && session.id !== undefined ? String(session.id) : '',
+    sessionEventCount: session && Array.isArray(session.log) ? session.log.length : null,
+    sessionFirstLiveSeq: session && Number.isFinite(session.firstLiveSeq) ? session.firstLiveSeq : null,
+    sessionInheritedEventCount: session && Number.isFinite(session.inheritedEventCount) ? session.inheritedEventCount : null,
     sections,
     sectionNames: sections.map((item) => item.name),
     qqbotSections,
     qqbotSectionNames: qqbotSections.map((item) => item.name),
     variables: Object.keys(variables).sort(),
+    variableValues,
     contexts: (Array.isArray(assembly.contexts) ? assembly.contexts : []).map((entry) => textOf(entry && entry.name)),
     assemblyToolNames: (Array.isArray(assembly.tools) ? assembly.tools : []).map((tool) => textOf(tool && tool.name)).sort(),
     visibleToolNames: [...view.visible.keys()].map(String).sort(),
@@ -214,18 +228,49 @@ async function runProbe(out) {
   if (!instance) throw new Error('host.ensureRuntime 返回空（bot 未进入宿主）');
 
   const peer = 'group:cold-probe';
+  // 播种人设文件，让 qqbot:persona 段有非空文本，冷/热两次 assembly 才能做「文本一致」的实质断言
+  const personaMarker = '冷会话探针人设：你是QQ群里的测试机器人，回答简短。';
+  try {
+    fs.mkdirSync(instance.cwd, { recursive: true });
+    fs.writeFileSync(path.join(instance.cwd, 'persona.md'), personaMarker + '\n', 'utf8');
+    step('播种 persona.md: ' + path.join(instance.cwd, 'persona.md'));
+  } catch (err) {
+    step('写 persona.md 失败（继续）: ' + errText(err).split('\n')[0]);
+  }
+  const dshHome = textOf(process.env.DSH_HOME);
+  const sessionPersisted = () => {
+    if (dshHome === '') return false;
+    const root = path.join(dshHome, 'sessions');
+    try {
+      for (const project of fs.readdirSync(root)) {
+        const dir = path.join(root, project, firstSessionId());
+        if (fs.existsSync(dir)) {
+          const files = fs.readdirSync(dir);
+          if (files.some((name) => name.startsWith('session.'))) return true;
+        }
+      }
+    } catch { /* ignore */ }
+    return false;
+  };
+  let persistedSessionId = '';
+  const firstSessionId = () => persistedSessionId;
   step('创建会话: bot=' + bot.id + ' peer=' + peer);
   const firstRecord = await instance.getOrCreate(peer);
+  persistedSessionId = String(firstRecord.sessionId);
   const first = await captureSnapshot(host, firstRecord.agent);
   step('首轮 assembly: sections=' + first.sectionNames.length + ' tools=' + first.visibleToolNames.length
     + ' qqbot段=' + first.qqbotSectionNames.join(',') + ' session=' + first.sessionId);
 
   // 释放 agent（模拟会话结束 / 冷路径），并清掉宿主 live 缓存，下一次 getOrCreate 才会走 resume
+  await SLEEP(300);
+  const persistedBeforeDispose = sessionPersisted();
   step('释放 agent（handle.dispose）并清 live 缓存');
   try { await firstRecord.handle.dispose(); } catch (err) { step('dispose 抛错（记录后继续）: ' + errText(err).split('\n')[0]); }
   try { instance.sessions.delete(peer); } catch { /* ignore */ }
   try { host.sessionIndex.delete(String(firstRecord.sessionId)); } catch { /* ignore */ }
   await SLEEP(800);
+  const persistedBeforeResume = sessionPersisted();
+  step('会话持久化文件: dispose 前=' + persistedBeforeDispose + ' resume 前=' + persistedBeforeResume);
 
   step('冷路径重新 getOrCreate（应走 dsh 持久化 resume）');
   const secondRecord = await instance.getOrCreate(peer);
@@ -249,6 +294,17 @@ async function runProbe(out) {
   const agentRecreated = firstRecord.agent !== secondRecord.agent;
   const sessionIdStable = first.sessionId !== '' && first.sessionId === second.sessionId;
 
+  const personaSection = (snapshot) => (snapshot.qqbotSections.find((item) => item.name === 'qqbot:persona') || {});
+  const guideSection = (snapshot) => (snapshot.qqbotSections.find((item) => item.name === 'qqbot:guide') || {});
+  const personaNonEmpty = (personaSection(first).renderedChars || 0) > 0
+    && (personaSection(second).renderedChars || 0) > 0
+    && (personaSection(first).rendered || '').includes(personaMarker);
+  const resumeEvidence = {
+    sessionEventCountFirst: first.sessionEventCount,
+    sessionEventCountSecond: second.sessionEventCount,
+    sessionInheritedEventCountSecond: second.sessionInheritedEventCount,
+    note: '第二次 getOrCreate 未新建 session（sessionId 相同），事件数非零说明从持久化恢复',
+  };
   const checks = {
     runtimeResolved: { pass: true, via: resolved.source },
     sessionIdStable: { pass: sessionIdStable, first: first.sessionId, second: second.sessionId },
@@ -262,10 +318,99 @@ async function runProbe(out) {
       changed: qqbotTextChanges,
       note: '渲染后文本（{{}} 已用 assembly.variables 展开）逐段一致',
     },
+    qqbotPersonaNonEmpty: {
+      pass: personaNonEmpty,
+      marker: personaMarker,
+      firstChars: personaSection(first).renderedChars,
+      secondChars: personaSection(second).renderedChars,
+      note: '人设段两次都渲染出非空文本，排除「空文本一致」的伪通过',
+    },
+    qqbotGuideDiagnostic: {
+      pass: true,
+      firstChars: guideSection(first).renderedChars || 0,
+      secondChars: guideSection(second).renderedChars || 0,
+      note: '工具指引段长度（0 = 工具指引链路未产出文本，见 SMOKE-REPORT 已知问题；不作为冷会话一致性判据）',
+    },
+    sessionPersisted: {
+      pass: persistedBeforeResume === true,
+      beforeDispose: persistedBeforeDispose,
+      beforeResume: persistedBeforeResume,
+      evidence: resumeEvidence,
+    },
     sectionsStable: { pass: sectionsStable, diff: diffList(first.sectionNames, second.sectionNames) },
     variablesStable: { pass: sameStringSet(first.variables, second.variables), first: first.variables, second: second.variables },
     contextsStable: { pass: sameStringSet(first.contexts, second.contexts), first: first.contexts, second: second.contexts },
   };
+  // ── 召回段验证（M4 接线）：记忆/知识命中时 qqbot:memory / qqbot:knowledge 必须非空 ──
+  // 检索语义是「整串子串/短语匹配」（DESIGN §7.1），query 必须是种子文本的连续子串
+  const recallQuery = '滨江公园';
+  const memoryMarker = '探针长期记忆：管理员喜欢喝乌龙茶，常去滨江公园';
+  const kbMarker = '探针知识条目：周五下午三点在滨江公园集合';
+  const kbTitle = '探针知识库';
+  const recallDebug = { seededMemory: false, seededKnowledge: false, followup: 'not-run' };
+  try {
+    if (runtime.memory && typeof runtime.memory.save === 'function') {
+      runtime.memory.save({ botId: bot.id, text: memoryMarker, kind: 'fact', source: 'probe' });
+      recallDebug.seededMemory = true;
+    }
+  } catch (err) { recallDebug.memoryError = errText(err).split('\n')[0]; }
+  try {
+    if (runtime.kb && typeof runtime.kb.ingest === 'function') {
+      runtime.kb.ingest({ botId: bot.id, source: 'probe:kb', title: kbTitle, text: kbMarker });
+      recallDebug.seededKnowledge = true;
+    }
+  } catch (err) { recallDebug.knowledgeError = errText(err).split('\n')[0]; }
+  step('召回段验证：播种记忆/知识 → followup 触发召回（' + 'seededMemory=' + recallDebug.seededMemory + ' seededKnowledge=' + recallDebug.seededKnowledge + '）');
+  try {
+    const outcome = await Promise.race([
+      instance.followup(peer, { text: recallQuery })
+        .then((value) => ({ done: true, value }))
+        .catch((err) => ({ done: true, error: errText(err).split('\n')[0] })),
+      SLEEP(20000).then(() => ({ done: false, timeout: true })),
+    ]);
+    recallDebug.followup = outcome;
+  } catch (err) { recallDebug.followup = { error: errText(err).split('\n')[0] }; }
+  await SLEEP(1200);
+  let third = null;
+  try { third = await captureSnapshot(host, secondRecord.agent); } catch (err) {
+    recallDebug.snapshotError = errText(err).split('\n')[0];
+  }
+  const recallSection = (snapshot, sectionName) => {
+    if (!snapshot) return {};
+    return snapshot.qqbotSections.find((item) => item.name === sectionName) || {};
+  };
+  const memoryRecallText = recallSection(third, 'qqbot:memory').rendered || '';
+  const knowledgeRecallText = recallSection(third, 'qqbot:knowledge').rendered || '';
+  checks.qqbotGuideNonEmpty = {
+    pass: (guideSection(first).renderedChars || 0) > 0 && (guideSection(second).renderedChars || 0) > 0,
+    firstChars: guideSection(first).renderedChars || 0,
+    secondChars: guideSection(second).renderedChars || 0,
+    note: '工具指引段两次都必须有文本（v2 用 agent scope 工具视图生成）',
+  };
+  checks.hostToolsMounted = {
+    pass: first.visibleToolNames.length > 6
+      && first.visibleToolNames.some((toolName) => ['read', 'write', 'edit', 'glob', 'grep', 'web_search', 'web_fetch'].includes(toolName)),
+    count: first.visibleToolNames.length,
+    restrictable: first.restrictableToolNames,
+    note: '插件工具之外还应有宿主工具（能力开关 workspace/web/memory 生效）',
+  };
+  checks.qqbotMemoryRecall = {
+    pass: recallDebug.seededMemory === true && memoryRecallText.includes(memoryMarker),
+    chars: memoryRecallText.length,
+    preview: truncate(memoryRecallText, 240),
+    seeded: recallDebug.seededMemory,
+    followup: recallDebug.followup,
+    note: '播种长期记忆 → followup 触发 recall → qqbot:memory 段应包含该记忆',
+  };
+  checks.qqbotKnowledgeRecall = {
+    pass: recallDebug.seededKnowledge === true && knowledgeRecallText.includes(kbMarker),
+    chars: knowledgeRecallText.length,
+    preview: truncate(knowledgeRecallText, 240),
+    seeded: recallDebug.seededKnowledge,
+    note: '播种知识库 → followup 触发 kb.search → qqbot:knowledge 段应包含该知识',
+  };
+  try { await secondRecord.handle.dispose(); } catch { /* ignore */ }
+
   const ok = Object.values(checks).every((check) => check.pass === true);
 
   return {
@@ -280,6 +425,13 @@ async function runProbe(out) {
     peer,
     first,
     second,
+    recall: {
+      query: recallQuery,
+      memoryMarker,
+      kbMarker,
+      debug: recallDebug,
+      qqbotSections: third ? third.qqbotSections : null,
+    },
     steps,
     checks,
   };
@@ -295,6 +447,7 @@ function parseArgs(argv) {
     out: path.join(REPO_ROOT, '.work', 'probe-tools.json'),
     timeoutMs: 180000,
     install: true,
+    reinstall: false,
     keepTemp: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -305,6 +458,7 @@ function parseArgs(argv) {
     else if (arg === '--out') out.out = path.resolve(argv[++i]);
     else if (arg === '--timeout-ms') out.timeoutMs = Number(argv[++i]);
     else if (arg === '--no-install') out.install = false;
+    else if (arg === '--reinstall') out.reinstall = true;
     else if (arg === '--keep-temp') out.keepTemp = true;
     else if (arg === '--help' || arg === '-h') { printDriverHelp(); process.exit(0); }
     else { console.error('[probe] 未知参数: ' + arg); process.exit(2); }
@@ -324,9 +478,30 @@ function printDriverHelp() {
     '  --out <file>       探针 JSON 输出（默认 .work/probe-tools.json）',
     '  --timeout-ms <n>   探针整体超时（默认 180000）',
     '  --no-install       不自动补装插件（profile 里必须已装）',
+    '  --reinstall        强制从当前仓库重新复制安装（验收当前工作树）',
     '  --keep-temp        保留临时探针目录（排查用）',
     '',
   ].join('\n'));
+}
+
+/** 探测 127.0.0.1:port 是否已被占用。 */
+function isPortOpen(port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port });
+    const done = (value) => { try { socket.destroy(); } catch { /* ignore */ } resolve(value); };
+    socket.setTimeout(600);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+  });
+}
+
+/** 从 start 起找空闲端口（33085+ 避让同机其他实例）。 */
+async function findFreePort(start) {
+  for (let port = start; port < start + 30; port += 1) {
+    if (!(await isPortOpen(port))) return port;
+  }
+  throw new Error('端口 ' + start + '~' + (start + 29) + ' 都被占用');
 }
 
 /** 找 dsh 可执行文件；优先与当前 node 同版本目录，其次 PATH，最后 nvm v24+。 */
@@ -364,8 +539,17 @@ function nodeVersionFor(dshBin) {
   return textOf(result.stdout).trim();
 }
 
-function ensureInstalled(opts) {
+function ensureInstalled(opts, dshBin) {
   const profileDir = path.join(opts.dshHome, 'profiles', opts.profile);
+  if (!fs.existsSync(path.join(profileDir, 'package.json'))) {
+    // 新 DSH_HOME：先让 dsh 从随附模板初始化 profile（否则 install 只会建个缺 base 的最小 manifest）
+    const init = spawnSync(dshBin, ['--profile', opts.profile, '--dump-default-config'], {
+      cwd: REPO_ROOT,
+      env: Object.assign({}, process.env, { DSH_HOME: opts.dshHome }),
+      encoding: 'utf8',
+    });
+    if (init.status !== 0) throw new Error('初始化隔离 profile 失败: ' + String(init.stderr || '').slice(-800));
+  }
   const installed = path.join(profileDir, 'node_modules', 'dsh-qqbot-buddy', 'package.json');
   let registered = false;
   try {
@@ -373,7 +557,10 @@ function ensureInstalled(opts) {
     const bundles = manifest && manifest.dsh && manifest.dsh.profile && manifest.dsh.profile.bundles;
     registered = Array.isArray(bundles) && bundles.includes('dsh-qqbot-buddy');
   } catch { /* profile 未初始化 */ }
-  if (fs.existsSync(installed) && registered) return { installed: true, profileDir };
+  if (fs.existsSync(installed) && registered && opts.reinstall !== true) return { installed: true, profileDir };
+  if (opts.reinstall === true) {
+    try { fs.rmSync(path.dirname(installed), { recursive: true, force: true }); } catch { /* ignore */ }
+  }
   if (!opts.install) throw new Error('profile 里没有安装 dsh-qqbot-buddy（' + profileDir + '）；去掉 --no-install 或先执行 node scripts/install.mjs --local --profile ' + opts.profile);
   const result = spawnSync(process.execPath, [path.join(REPO_ROOT, 'scripts', 'install.mjs'), '--local', '--profile', opts.profile], {
     cwd: REPO_ROOT,
@@ -394,8 +581,9 @@ function stagePlugin() {
 
 function writePatch(opts, pluginFile, installedEntry) {
   const patchFile = path.join(path.dirname(pluginFile), 'probe.patch.yml');
-  const workRoot = path.join(path.dirname(opts.out), 'workspace');
-  const dataDir = path.join(path.dirname(opts.out), 'data');
+  const probeDir = path.join(REPO_ROOT, '.work', 'probe-env');
+  const workRoot = path.join(probeDir, 'workspace');
+  const dataDir = path.join(probeDir, 'data');
   fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(workRoot, { recursive: true });
   const yaml = [
@@ -431,6 +619,9 @@ async function runDriver() {
   if (!Number.isFinite(opts.port) || opts.port <= 0) throw new Error('--port 非法');
   const dshBin = findDsh();
   if (dshBin === '') throw new Error('找不到 dsh 可执行文件（可用 DSH_BIN 指定）');
+  const requestedPort = opts.port;
+  opts.port = await findFreePort(opts.port);
+  if (opts.port !== requestedPort) console.log('[probe] 端口避让：dsh web ' + requestedPort + ' 被占用 → ' + opts.port);
   const nodeVer = nodeVersionFor(dshBin);
   if (nodeVer !== '' && Number(nodeVer.replace(/^v/, '').split('.')[0]) < 24) {
     throw new Error('dsh 所在 Node ' + nodeVer + ' < 24；请用 Node 24 的 dsh（--help 见 DSH_BIN）');
@@ -438,13 +629,15 @@ async function runDriver() {
   console.log('[probe] dsh=' + dshBin + ' node=' + (nodeVer || '(未知)'));
   console.log('[probe] DSH_HOME=' + opts.dshHome + ' profile=' + opts.profile + ' out=' + opts.out);
 
-  const { profileDir } = ensureInstalled(opts);
+  const { profileDir } = ensureInstalled(opts, dshBin);
   const entry = path.join(profileDir, 'node_modules', 'dsh-qqbot-buddy', 'lib', 'index.js');
   if (!fs.existsSync(entry)) throw new Error('已安装插件入口不存在: ' + entry);
 
   fs.mkdirSync(path.dirname(opts.out), { recursive: true });
   fs.mkdirSync(path.dirname(opts.log), { recursive: true });
   try { fs.rmSync(opts.out, { force: true }); } catch { /* ignore */ }
+  // 每次探针用全新的 DB/workspace：首次 getOrCreate 一定走 create，第二次才走持久化 resume
+  try { fs.rmSync(path.join(REPO_ROOT, '.work', 'probe-env'), { recursive: true, force: true }); } catch { /* ignore */ }
 
   const staged = stagePlugin();
   const stagedMeta = writePatch(opts, staged.file, entry);

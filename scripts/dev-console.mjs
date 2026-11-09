@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { apply } from '../lib/index.js';
+import { apply, getRuntime } from '../lib/index.js';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const dataDir = path.resolve(process.argv[2] || path.join(repoRoot, '.work', 'console-dev'));
@@ -21,13 +21,16 @@ fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(workspaceRoot, { recursive: true });
 
 const ctx = { get: () => undefined, effect: () => () => {} };
-const runtime = await apply(ctx, {
+await apply(ctx, {
   dataDir,
   workspaceRoot,
   autoStart: false,
   debug: false,
   console: { enabled: true, host: '127.0.0.1', port, token: '' },
 });
+// apply 不能 return（cordis 会把返回值当 effect），从插件运行时取实例
+const runtime = getRuntime();
+if (!runtime) throw new Error('插件运行时未初始化：apply 失败（见上方日志）');
 
 // ── 演示数据（幂等：已有 bot 就跳过）──
 const store = runtime.config;
@@ -46,13 +49,67 @@ if (store.listBots().length === 0) {
     runtime.memory.save({ botId: bot.id, peer: 'group:123456', text: '群友小k 喜欢猫，周末常去露营', kind: 'fact' });
     runtime.memory.save({ botId: bot.id, peer: 'c2c:alice', text: 'alice 在杭州做前端，偏好简洁回答', kind: 'fact' });
   }
-  runtime.db.prepare("INSERT INTO members(bot_id, openid, nickname, note, updated_at) VALUES(?,?,?,?,?)")
-    .run(bot.id, 'u_alice', 'Alice', '前端工程师，杭州', Date.now());
-  runtime.db.prepare("INSERT INTO members(bot_id, openid, nickname, note, updated_at) VALUES(?,?,?,?,?)")
-    .run(bot.id, 'u_bob', '小K', '喜欢猫，露营爱好者', Date.now());
-  const pid = 'prs_demo';
-  runtime.db.prepare("INSERT OR REPLACE INTO personas(id, bot_id, name, content, active, created_at, updated_at) VALUES(?,?,?,?,?,?,?)")
-    .run(pid, bot.id, '默认助手', '你是一个耐心、简洁的 QQ 群助手，回答不超过三句。', 1, Date.now(), Date.now());
+  // 群友库、人格卡、表情包演示数据：优先走 core store，保证与真实链路一致
+  if (runtime.members) {
+    runtime.members.upsert({
+      botId: bot.id, openid: 'u_alice', nickname: 'Alice', note: '前端工程师，杭州',
+      profileJson: { tags: ['老群友'], city: '杭州' },
+    });
+    runtime.members.upsert({
+      botId: bot.id, openid: 'u_bob', nickname: '小K', note: '喜欢猫，露营爱好者',
+      profileJson: { tags: ['活跃'], hobby: '露营' },
+    });
+    runtime.members.upsert({ botId: bot.id, openid: 'u_carol', nickname: '卡罗', note: '新入群，多关照' });
+  } else {
+    runtime.db.prepare('INSERT INTO members(bot_id, openid, nickname, note, updated_at) VALUES(?,?,?,?,?)')
+      .run(bot.id, 'u_alice', 'Alice', '前端工程师，杭州', Date.now());
+    runtime.db.prepare('INSERT INTO members(bot_id, openid, nickname, note, updated_at) VALUES(?,?,?,?,?)')
+      .run(bot.id, 'u_bob', '小K', '喜欢猫，露营爱好者', Date.now());
+  }
+  if (runtime.personas) {
+    const p1 = runtime.personas.create({
+      botId: bot.id,
+      name: '默认助手',
+      content: '你是一个耐心、简洁的 QQ 群助手，回答不超过三句。',
+    });
+    runtime.personas.activate({ botId: bot.id, id: p1.id });
+    runtime.personas.create({
+      botId: bot.id,
+      name: '毒舌吐槽',
+      content: '你说话直接、爱吐槽，但保持善意，不人身攻击。',
+    });
+    runtime.personas.create({
+      botId: bot.id,
+      name: '深夜树洞',
+      content: '你温柔倾听，先共情再给建议，回复尽量短。',
+    });
+  }
+  if (runtime.stickers) {
+    // 1x1 透明 PNG 足够演示列表；真实使用中是入站图片/表情文件
+    const stickerDir = path.join(bot.cwd || path.join(workspaceRoot, 'bots', bot.id), 'stickers');
+    fs.mkdirSync(stickerDir, { recursive: true });
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lK3ZxwAAAABJRU5ErkJggg==', 'base64');
+    const seeds = [
+      { name: '猫猫点赞', emotion: '开心', file: 'cat-like.png' },
+      { name: '狗狗问号', emotion: '疑惑', file: 'dog-what.png' },
+      { name: '晚安', emotion: '困', file: 'night.png' },
+    ];
+    for (const item of seeds) {
+      const absFile = path.join(stickerDir, item.file);
+      fs.writeFileSync(absFile, png);
+      // 入库用相对路径，控制台列表展示更干净；真实链路（QQ 工具）会存绝对路径
+      runtime.stickers.add({
+        botId: bot.id,
+        name: item.name,
+        file: path.join('stickers', item.file),
+        emotion: item.emotion,
+        hash: 'demo-' + item.file,
+      });
+    }
+    // 当日发送量演示（截图里的 quota 计数）
+    runtime.stickers.recordSend({ botId: bot.id });
+    runtime.stickers.recordSend({ botId: bot.id });
+  }
   store.audit({ botId: bot.id, kind: 'demo.seed', detail: '演示数据已就绪' });
 }
 await runtime.discovery?.refresh?.();
