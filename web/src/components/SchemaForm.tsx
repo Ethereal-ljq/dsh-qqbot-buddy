@@ -263,7 +263,9 @@ function WidgetInput({ item, widget, id, value, onChange, disabled }: {
   );
 }
 
-export function SchemaForm({ payload, values, dirty, onChange, scopes, showScope = true, disabled = false }: {
+export function SchemaForm({
+  payload, values, dirty, onChange, scopes, showScope = true, disabled = false, sectionId,
+}: {
   payload: SchemaPayload;
   values: Record<string, unknown>;
   dirty: Record<string, unknown>;
@@ -271,26 +273,32 @@ export function SchemaForm({ payload, values, dirty, onChange, scopes, showScope
   scopes?: Array<'global' | 'bot' | 'profile'>;
   showScope?: boolean;
   disabled?: boolean;
+  /** 只渲染指定分节（配置档页的 section 子 tab）；不传则渲染全部分节。 */
+  sectionId?: string;
 }) {
   const groups = useMemo(() => {
     const sectionMap = new Map(payload.sections.map((section) => [section.id, section]));
-    const items = payload.items.filter((item) => !scopes || (item.scope && scopes.includes(item.scope)));
+    const items = payload.items.filter((item) => {
+      if (scopes && !(item.scope && scopes.includes(item.scope))) return false;
+      if (sectionId !== undefined && (item.section || 'other') !== sectionId) return false;
+      return true;
+    });
     const grouped = new Map<string, { section: { id: string; label: string; order: number; desc?: string }; items: SchemaItem[] }>();
     for (const item of items) {
-      const sectionId = item.section || 'other';
-      let entry = grouped.get(sectionId);
+      const id = item.section || 'other';
+      let entry = grouped.get(id);
       if (!entry) {
-        const section = sectionMap.get(sectionId);
+        const section = sectionMap.get(id);
         entry = {
           section: {
-            id: sectionId,
-            label: section?.label || (sectionId === 'other' ? '其他' : sectionId),
-            order: section?.order ?? (sectionId === 'other' ? 999 : 500),
+            id,
+            label: section?.label || (id === 'other' ? '其他' : id),
+            order: section?.order ?? (id === 'other' ? 999 : 500),
             desc: section?.desc,
           },
           items: [],
         };
-        grouped.set(sectionId, entry);
+        grouped.set(id, entry);
       }
       entry.items.push(item);
     }
@@ -298,10 +306,46 @@ export function SchemaForm({ payload, values, dirty, onChange, scopes, showScope
       if (a.section.order !== b.section.order) return a.section.order - b.section.order;
       return SCOPE_ORDER[a.section.id] ?? 0;
     });
-  }, [payload, scopes]);
+  }, [payload, scopes, sectionId]);
+
+  const renderField = (item: SchemaItem) => {
+    const widget = resolveWidget(item);
+    const value = Object.prototype.hasOwnProperty.call(dirty, item.key)
+      ? dirty[item.key]
+      : getPath(values, item.key, item.default);
+    const wide = widget === 'textarea' || widget === 'json' || widget === 'tags';
+    return (
+      <Field
+        key={item.key}
+        label={item.label || item.key}
+        htmlFor={'schema-' + item.key}
+        help={item.help}
+        scope={showScope ? item.scope : undefined}
+        wide={wide}
+      >
+        <WidgetInput
+          item={item}
+          widget={widget}
+          id={'schema-' + item.key}
+          value={value}
+          disabled={disabled}
+          onChange={(next) => onChange(item.key, next)}
+        />
+      </Field>
+    );
+  };
 
   if (groups.length === 0) {
-    return null;
+    return sectionId === undefined ? null : <p className="muted">该分区暂无可用设置项。</p>;
+  }
+
+  // 单分区模式：父级已经用子 tab 表达了分区名，这里只渲染字段网格。
+  if (sectionId !== undefined) {
+    return (
+      <div className="schema-form">
+        <div className="fields-grid">{groups[0].items.map(renderField)}</div>
+      </div>
+    );
   }
 
   return (
@@ -312,34 +356,7 @@ export function SchemaForm({ payload, values, dirty, onChange, scopes, showScope
             <h2 className="schema-section-title">{group.section.label}</h2>
             {group.section.desc ? <p className="schema-section-desc">{group.section.desc}</p> : null}
           </header>
-          <div className="fields-grid">
-            {group.items.map((item) => {
-              const widget = resolveWidget(item);
-              const value = Object.prototype.hasOwnProperty.call(dirty, item.key)
-                ? dirty[item.key]
-                : getPath(values, item.key, item.default);
-              const wide = widget === 'textarea' || widget === 'json' || widget === 'tags';
-              return (
-                <Field
-                  key={item.key}
-                  label={item.label || item.key}
-                  htmlFor={'schema-' + item.key}
-                  help={item.help}
-                  scope={showScope ? item.scope : undefined}
-                  wide={wide}
-                >
-                  <WidgetInput
-                    item={item}
-                    widget={widget}
-                    id={'schema-' + item.key}
-                    value={value}
-                    disabled={disabled}
-                    onChange={(next) => onChange(item.key, next)}
-                  />
-                </Field>
-              );
-            })}
-          </div>
+          <div className="fields-grid">{group.items.map(renderField)}</div>
         </section>
       ))}
     </div>

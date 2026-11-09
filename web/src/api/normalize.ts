@@ -10,7 +10,7 @@ import type {
   AuditEntry, Binding, Bot, BotRuntime, ConsoleInfo, Health, IngestResult, KbDoc, KbHit,
   Member, Memory, Persona, Profile, SchemaItem, SchemaPayload, SchemaSection, SettingsPayload,
   SkillItem, SkillPolicy, SkillsPayload, StateSnapshot, Sticker, StickerQuota, ToolItem, ToolPolicy,
-  ToolsPayload, MemoryHit,
+  ToolsPayload, MemoryHit, PromptPreview, PromptSection,
 } from './types';
 import { setPath } from '../lib/objects';
 
@@ -300,6 +300,35 @@ export function normKbHit(raw: unknown): KbHit {
     title: val(r, 'title') === undefined || val(r, 'title') === null ? null : str(val(r, 'title')),
     score: val(r, 'score') === undefined ? undefined : num(val(r, 'score')),
     mode: val(r, 'mode') === undefined ? undefined : str(val(r, 'mode')),
+  };
+}
+
+function normPromptSection(raw: unknown): PromptSection {
+  const r = rec(raw);
+  const text = str(val(r, 'text'));
+  return {
+    name: str(val(r, 'name')),
+    label: str(val(r, 'label'), str(val(r, 'name'))),
+    text,
+    chars: num(val(r, 'chars'), Array.from(text).length),
+  };
+}
+
+/** 提示词拼合预览：缺字段时尽量兜底，不让 UI 崩。 */
+export function normPromptPreview(raw: unknown): PromptPreview {
+  const r = rec(raw);
+  const sections = list(val(r, 'sections')).map(normPromptSection);
+  const text = val(r, 'text') === undefined
+    ? sections.map((section) => section.text).filter(Boolean).join('\n\n')
+    : str(val(r, 'text'));
+  return {
+    ok: bool(val(r, 'ok'), true),
+    source: str(val(r, 'source'), 'composed'),
+    sections,
+    text,
+    notes: strings(val(r, 'notes')),
+    toolNames: strings(val(r, 'toolNames', 'tool_names')),
+    skillNames: strings(val(r, 'skillNames', 'skill_names')),
   };
 }
 

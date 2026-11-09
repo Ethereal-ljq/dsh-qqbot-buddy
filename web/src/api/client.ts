@@ -9,14 +9,14 @@
  */
 import type {
   AuditEntry, Binding, Bot, BotInput, Health, IngestResult, KbDoc, KbHit, Member, MemberInput,
-  Memory, MemoryHit, MemorySaveResult, Persona, PersonaInput, Profile, SchemaPayload, SessionInfo,
-  SettingsPayload, SkillPolicy, SkillsPayload, StateSnapshot, Sticker, StickerInput, StickerQuota,
-  ToolPolicy, ToolsPayload,
+  Memory, MemoryHit, MemorySaveResult, Persona, PersonaInput, Profile, PromptPreview, PromptPreviewInput,
+  SchemaPayload, SessionInfo, SettingsPayload, SkillPolicy, SkillsPayload, StateSnapshot, Sticker,
+  StickerInput, StickerQuota, ToolPolicy, ToolsPayload,
 } from './types';
 import {
   normAudit, normBinding, normBot, normHealth, normIngest, normKbDoc, normKbHit, normMember,
-  normMemory, normMemoryHit, normPersona, normProfile, normSchema, normSettings, normSkills,
-  normState, normSticker, normStickerQuota, normTools,
+  normMemory, normMemoryHit, normPersona, normProfile, normPromptPreview, normSchema, normSettings,
+  normSkills, normState, normSticker, normStickerQuota, normTools,
 } from './normalize';
 
 const CSRF_HEADERS: Record<string, string> = { 'X-QQBot-CSRF': '1' };
@@ -337,6 +337,21 @@ export const api = {
   },
   async stickerQuota(botId: string, signal?: AbortSignal): Promise<StickerQuota> {
     return normStickerQuota(await request('/stickers/quota', { query: { bot: botId }, signal }));
+  },
+
+  // 提示词拼合预览（M1c）：只含本插件 prompt 段，宿主段由 dsh 追加
+  async previewPrompt(input: PromptPreviewInput, signal?: AbortSignal): Promise<PromptPreview> {
+    const raw = await request<unknown>('/preview/prompt', {
+      query: {
+        bot: input.botId,
+        profile: input.profileId,
+        peer: input.peer,
+        query: input.query,
+        scope: input.scope,
+      },
+      signal,
+    });
+    return normPromptPreview(raw);
   },
 
   // 审计

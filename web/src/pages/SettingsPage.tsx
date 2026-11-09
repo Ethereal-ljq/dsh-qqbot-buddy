@@ -94,12 +94,27 @@ export function SettingsPage() {
         )}
       />
 
-      <div className="hint-strip">
-        <span className="hint-label">作用域</span>
-        <span className="hint-text">
-          全局项写入全局层；机器人项写入当前 bot；配置档项写入该 bot 的默认配置档（更细的覆盖可在“配置档与绑定”里编辑）。
-        </span>
-        {!botId ? <button type="button" className="link-btn" onClick={() => navigate('/bots')}>去选择机器人</button> : null}
+      <div className="hierarchy-banner">
+        <div className="hierarchy-main">
+          <div className="hierarchy-title-row">
+            <span className="hierarchy-title">层级优先级</span>
+            <div className="hierarchy-levels" aria-label="配置层级从高到低">
+              <span className="hierarchy-level profile"><span className="mono">profile</span><span className="hierarchy-level-desc">绑定 / 默认档</span></span>
+              <span className="hierarchy-arrow" aria-hidden="true">›</span>
+              <span className="hierarchy-level bot"><span className="mono">bot</span><span className="hierarchy-level-desc">机器人</span></span>
+              <span className="hierarchy-arrow" aria-hidden="true">›</span>
+              <span className="hierarchy-level global"><span className="mono">global</span><span className="hierarchy-level-desc">全局</span></span>
+              <span className="hierarchy-priority">从高到低</span>
+            </div>
+          </div>
+          <p className="hierarchy-note">
+            profile 级设置建议在「配置档」页统一编辑（与绑定/默认档联动）；本页修改会按每项 scope 自动分流到 global / bot / 默认 profile，功能保留，仅提示层级关系。
+          </p>
+        </div>
+        <div className="hierarchy-actions">
+          <button type="button" className="btn btn-sm" onClick={() => navigate('/profiles')}>去配置档页编辑</button>
+          {!botId ? <button type="button" className="link-btn" onClick={() => navigate('/bots')}>选择机器人</button> : null}
+        </div>
       </div>
 
       {schema.loading ? (

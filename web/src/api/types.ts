@@ -290,3 +290,33 @@ export interface SseEvent {
 }
 
 export type SseStatus = 'connecting' | 'live' | 'down';
+
+/** 提示词拼合预览的单个 prompt 段（GET /api/preview/prompt）。 */
+export interface PromptSection {
+  name: string;
+  label: string;
+  text: string;
+  chars: number;
+}
+
+/**
+ * GET /api/preview/prompt 响应。
+ * 只包含本插件注册的 prompt 段；宿主段（身份/工具 schema）由 dsh 在运行时追加，不在此处。
+ */
+export interface PromptPreview {
+  ok: boolean;
+  source: string;
+  sections: PromptSection[];
+  text: string;
+  notes: string[];
+  toolNames: string[];
+  skillNames: string[];
+}
+
+export interface PromptPreviewInput {
+  botId: string;
+  profileId?: string;
+  peer?: string;
+  query?: string;
+  scope?: 'group' | 'c2c';
+}

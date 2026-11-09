@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { api, toApiError } from '../api/client';
-import type { Binding, Profile } from '../api/types';
+import type { Binding, Profile, SchemaSection } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { CopyButton } from '../components/CopyButton';
 import { DataTable, type Column } from '../components/DataTable';
@@ -17,6 +17,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorNote } from '../components/ErrorNote';
 import { Field } from '../components/Field';
 import { PageHeader } from '../components/PageHeader';
+import { PromptPreview } from '../components/PromptPreview';
 import { SchemaForm } from '../components/SchemaForm';
 import { Badge } from '../components/Status';
 import { Tabs } from '../components/Tabs';
@@ -49,6 +50,8 @@ export function ProfilesPage() {
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Profile | null>(null);
   const [deleting, setDeleting] = useState(false);
+  /** 编辑区子 tab：schema section id / '__raw__' / 'preview'。 */
+  const [editorTab, setEditorTab] = useState<string>('');
 
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState('');
@@ -63,6 +66,52 @@ export function ProfilesPage() {
     || isDefault !== selected?.isDefault
     || (!schemaReady && rawText !== prettyJson(selected?.data ?? {}))
   );
+
+  /** 只保留包含 profile 级设置项的分区（按 schema order 排序）。 */
+  const profileSections = useMemo<SchemaSection[]>(() => {
+    const payload = schema.data;
+    if (!payload) return [];
+    const seen = new Set<string>();
+    const sections: SchemaSection[] = [];
+    for (const item of payload.items) {
+      if (item.scope !== 'profile') continue;
+      const id = item.section || 'other';
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const definition = payload.sections.find((section) => section.id === id);
+      sections.push({
+        id,
+        label: definition?.label || (id === 'other' ? '其他' : id),
+        order: definition?.order ?? (id === 'other' ? 999 : 500),
+        desc: definition?.desc,
+      });
+    }
+    return sections.sort((a, b) => (a.order ?? 500) - (b.order ?? 500));
+  }, [schema.data]);
+
+  const activeSection = profileSections.find((section) => section.id === editorTab) ?? null;
+
+  const dirtyBySection = useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (!schema.data) return counts;
+    const sectionByKey = new Map(schema.data.items.map((item) => [item.key, item.section || 'other']));
+    for (const key of Object.keys(dirty)) {
+      const section = sectionByKey.get(key) || 'other';
+      counts[section] = (counts[section] || 0) + 1;
+    }
+    return counts;
+  }, [dirty, schema.data]);
+
+  useEffect(() => {
+    if (editorTab === 'preview') return;
+    if (profileSections.some((section) => section.id === editorTab)) return;
+    // schema 未就绪时停在原始 JSON；加载完成后自动切到第一个分区
+    if (!schemaReady) {
+      if (editorTab !== '__raw__') setEditorTab('__raw__');
+      return;
+    }
+    setEditorTab(profileSections[0]?.id ?? '__raw__');
+  }, [profileSections, editorTab, schemaReady]);
 
   useEffect(() => {
     if (profiles.length === 0) {
@@ -436,49 +485,105 @@ export function ProfilesPage() {
 
                 <div className="editor-divider" />
 
-                {schema.loading ? (
-                  <p className="muted">正在加载设置 schema…</p>
-                ) : schemaReady && schema.data ? (
-                  <SchemaForm
-                    payload={schema.data}
-                    values={selected.data}
-                    dirty={dirty}
-                    scopes={['profile']}
-                    showScope={false}
-                    onChange={(key, value) => setDirty((prev) => ({ ...prev, [key]: value }))}
+                {/* 分区子 tab（来自 /api/schema sections）+ 提示词预览 */}
+                <div className="tabs editor-tabs" role="tablist" aria-label="配置档设置分区">
+                  {schemaReady ? profileSections.map((section) => (
+                    <button
+                      key={section.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={editorTab === section.id}
+                      className={'tab' + (editorTab === section.id ? ' active' : '')}
+                      onClick={() => setEditorTab(section.id)}
+                    >
+                      {section.label}
+                      {dirtyBySection[section.id] ? (
+                        <span className="tab-count" title={dirtyBySection[section.id] + ' 项未保存'}>
+                          {dirtyBySection[section.id]}
+                        </span>
+                      ) : null}
+                    </button>
+                  )) : (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={editorTab === '__raw__'}
+                      className={'tab' + (editorTab === '__raw__' ? ' active' : '')}
+                      onClick={() => setEditorTab('__raw__')}
+                    >
+                      原始 JSON
+                    </button>
+                  )}
+                  <span className="editor-tabs-spacer" />
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={editorTab === 'preview'}
+                    className={'tab preview-tab' + (editorTab === 'preview' ? ' active' : '')}
+                    onClick={() => setEditorTab('preview')}
+                  >
+                    提示词预览
+                  </button>
+                </div>
+
+                {editorTab === 'preview' ? (
+                  <PromptPreview
+                    botId={botId}
+                    profileId={selected.id}
+                    profileName={selected.name}
+                    hasUnsavedChanges={hasChanges}
+                    unsavedCount={dirtyCount}
+                    refreshKey={selected.updatedAt}
                   />
                 ) : (
-                  <div className="form-stack">
-                    <ErrorNote
-                      error={schema.error ?? toApiError(new Error('schema 为空'))}
-                      onRetry={schema.reload}
-                      compact
-                    />
-                    <Field
-                      label="配置档 data（原始 JSON）"
-                      htmlFor="profile-raw"
-                      help="设置 schema 未装配时的兜底编辑；保存会整体覆盖 data。"
-                      wide
-                    >
-                      <textarea
-                        id="profile-raw"
-                        className="input mono textarea json-area"
-                        rows={12}
-                        value={rawText}
-                        spellCheck={false}
-                        onChange={(event) => {
-                          setRawText(event.target.value);
-                          try {
-                            JSON.parse(event.target.value || '{}');
-                            setRawError(null);
-                          } catch (err) {
-                            setRawError('JSON 不合法：' + (err instanceof Error ? err.message : String(err)));
-                          }
-                        }}
+                  <>
+                    {activeSection?.desc ? <p className="editor-section-desc">{activeSection.desc}</p> : null}
+                    {schema.loading ? (
+                      <p className="muted">正在加载设置 schema…</p>
+                    ) : schemaReady && schema.data ? (
+                      <SchemaForm
+                        payload={schema.data}
+                        sectionId={editorTab}
+                        values={selected.data}
+                        dirty={dirty}
+                        scopes={['profile']}
+                        showScope={false}
+                        onChange={(key, value) => setDirty((prev) => ({ ...prev, [key]: value }))}
                       />
-                    </Field>
-                    {rawError ? <p className="field-error">{rawError}</p> : null}
-                  </div>
+                    ) : (
+                      <div className="form-stack">
+                        <ErrorNote
+                          error={schema.error ?? toApiError(new Error('schema 为空'))}
+                          onRetry={schema.reload}
+                          compact
+                        />
+                        <Field
+                          label="配置档 data（原始 JSON）"
+                          htmlFor="profile-raw"
+                          help="设置 schema 未装配时的兜底编辑；保存会整体覆盖 data。"
+                          wide
+                        >
+                          <textarea
+                            id="profile-raw"
+                            className="input mono textarea json-area"
+                            rows={12}
+                            value={rawText}
+                            spellCheck={false}
+                            onChange={(event) => {
+                              setRawText(event.target.value);
+                              try {
+                                JSON.parse(event.target.value || '{}');
+                                setRawError(null);
+                              } catch (err) {
+                                setRawError('JSON 不合法：' + (err instanceof Error ? err.message : String(err)));
+                              }
+                            }}
+                          />
+                        </Field>
+                        {rawError ? <p className="field-error">{rawError}</p> : null}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 
