@@ -11,6 +11,7 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
 function makeRig() {
   const sent = [];
+  const mediaSent = [];
   const record = { replyTarget: { scope: 'group', targetId: 'g1' } };
   const sessions = new Map([['s1', record]]);
   const manager = { findBySessionId: (id) => sessions.get(id) };
@@ -27,8 +28,14 @@ function makeRig() {
     manager,
     stats,
     getBot: () => bot,
+    getMediaSender: () => ({
+      sendImage: async (target, source) => {
+        mediaSent.push({ target, source });
+        return { id: 'img' + mediaSent.length };
+      },
+    }),
   });
-  return { sent, stats, handler };
+  return { sent, mediaSent, stats, handler };
 }
 
 test('sentTracker 同时记录消息 id 与引用 ref_idx', () => {
@@ -50,6 +57,59 @@ const assistant = (text, withToolCall) => ({
   },
 });
 const turnEnd = (kind = 'completed') => ({ type: 'turn/end', data: { reason: { kind } } });
+const toolCall = (name, callId, args = {}) => ({ type: 'tool/call', data: { name, callId, arguments: JSON.stringify(args) } });
+const toolResult = (callId, text) => ({
+  type: 'tool/result',
+  data: { message: { role: 'tool', toolCallId: callId, content: [{ type: 'text', text }] } },
+});
+
+test('生图/改图工具产出图片：turn/end 自动补发（模型忘了 send_file 也能发出）', async () => {
+  const { sent, mediaSent, stats, handler } = makeRig();
+  handler({ header: { id: 's1' } }, toolCall('edit_image', 'c1'));
+  handler({ header: { id: 's1' } }, toolResult('c1', 'Edited one image. It was also saved to the workspace as /tmp/gen/a.png. Respond to the user.'));
+  handler({ header: { id: 's1' } }, assistant('喏，改成我了'));
+  handler({ header: { id: 's1' } }, turnEnd());
+  await tick();
+  assert.deepEqual(sent, ['喏，改成我了']);
+  assert.equal(mediaSent.length, 1);
+  assert.deepEqual(mediaSent[0].source, { localPath: '/tmp/gen/a.png' });
+  assert.deepEqual(mediaSent[0].target, { scope: 'group', targetId: 'g1' });
+  assert.equal(stats.images, 1);
+});
+
+test('模型已用 qqbot_send_file 发过：不再重复自动补发', async () => {
+  const { mediaSent, handler } = makeRig();
+  handler({ header: { id: 's1' } }, toolCall('edit_image', 'c1'));
+  handler({ header: { id: 's1' } }, toolResult('c1', 'saved to the workspace as /tmp/gen/b.png'));
+  handler({ header: { id: 's1' } }, toolCall('qqbot_send_file', 'c2', { file_path: '/tmp/gen/b.png' }));
+  handler({ header: { id: 's1' } }, toolResult('c2', '已发送 b.png -> group:g1'));
+  handler({ header: { id: 's1' } }, assistant('给你'));
+  handler({ header: { id: 's1' } }, turnEnd());
+  await tick();
+  assert.equal(mediaSent.length, 0);
+});
+
+test('模型调了 qqbot_send_file 但发送失败：turn/end 仍自动补发', async () => {
+  const { mediaSent, handler } = makeRig();
+  handler({ header: { id: 's1' } }, toolCall('edit_image', 'c1'));
+  handler({ header: { id: 's1' } }, toolResult('c1', 'saved to the workspace as /tmp/gen/d.png'));
+  handler({ header: { id: 's1' } }, toolCall('qqbot_send_file', 'c2', { file_path: '/tmp/gen/d.png' }));
+  handler({ header: { id: 's1' } }, toolResult('c2', 'Error: qqbot_send_file: 无法确定发送目标，请显式传 target 参数'));
+  handler({ header: { id: 's1' } }, assistant('喏'));
+  handler({ header: { id: 's1' } }, turnEnd());
+  await tick();
+  assert.equal(mediaSent.length, 1, '手动发送失败不应算作已发');
+  assert.deepEqual(mediaSent[0].source, { localPath: '/tmp/gen/d.png' });
+});
+
+test('aborted turn 不自动补发图片', async () => {
+  const { mediaSent, handler } = makeRig();
+  handler({ header: { id: 's1' } }, toolCall('generate_image', 'c1'));
+  handler({ header: { id: 's1' } }, toolResult('c1', 'saved to the workspace as /tmp/gen/c.png'));
+  handler({ header: { id: 's1' } }, turnEnd('aborted'));
+  await tick();
+  assert.equal(mediaSent.length, 0);
+});
 
 test('助手先说话再调工具：只发工具回来后的最终回复', async () => {
   const { sent, stats, handler } = makeRig();

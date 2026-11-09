@@ -285,3 +285,7 @@ R4 真机复测：模型调用 `member_lookup {}`，回答「一共42个，前20
 | R5 | 问「你的知识库，对神棍老师和戴佳伟的印象」时回答"知识库里一条都没有"；问「知识库里有哪些内容」时回答"列表接口挂了" | `knowledge_search` 只有整串 query 检索，多词（带空格）FTS phrase 零命中且无逐词回退；且没有列文档模式（输出 schema 还强制 required results） | 检索拆词逐词回退；无 query/all=true 列文档（带 total 总篇数）；输出 schema 同时支持 results/docs；prompt 召回词拆分支持连接词与语气词（"那神棍老师和戴佳伟呢" → 神棍老师/戴佳伟） |
 
 R5 真机复测：`knowledge_search {all:true}` → 「知识库共 295 篇文档，列出最近 5 篇…」；`knowledge_search {query:"神棍老师 戴佳伟"}` → 命中「神棍老师麦迪文评价约定」等，回复结尾带「你们觉得呢」。
+
+| R6 | 生图/改图后图片不发送，需要用户提醒「图呢」才补发；手动 qqbot_send_file 失败也没有兜底 | 生图工具结果里的附件只进模型上下文，QQ 用户看不到；模型经常只回一句「喏」就结束；outbound 不感知工具产出 | outbound 跟踪生图工具的 tool/result（正则提取 saved path），turn/end 时对"生成但未成功发出"的图片自动补发（`mediaSender.sendImage(target, {localPath})`）；手动 qqbot_send_file 只有成功回执才算已发，失败仍兜底；工具指引明确要求生图后要发出来 |
+
+R6 真机复测：debug-followup「画一张…直接发出来」→ 模型 `generate_image` 后只回文字，日志出现 `自动补发生成图片: …/image-fdd56d82.png`（c2c 实际送达）。
