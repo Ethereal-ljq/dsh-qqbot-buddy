@@ -72,6 +72,33 @@ test('knowledge_*：knowledge_save 幂等入库 / knowledge_search / knowledge_r
   assert.deepEqual(doc, { found: true, title: '群规', chunks: 2 });
 });
 
+test('knowledge_search：多关键词拆开分别搜 + 无参列文档标题', async () => {
+  const docs = [{ id: 2, title: '炉石传说：常见主播、梗与天梯术语', chunkCount: 4 }];
+  const kb = {
+    search({ query }) {
+      if (query === '神棍老师 戴佳伟') return [];
+      if (query === '神棍老师' || query === '戴佳伟') {
+        return [{ title: '炉石传说：常见主播、梗与天梯术语', text: '主播 - **神棍老师**：… - **戴佳伟**：…', score: 0.9, mode: 'fts' }];
+      }
+      return [];
+    },
+    ingest() { return { docId: 1, chunks: 1, changed: true }; },
+    listDocs() { return docs; },
+    count() { return 295; },
+  };
+  const defs = createDataTools({ kb, botId: 'bot-1', manager, logger: silentLogger });
+  const search = byName(defs, 'knowledge_search');
+  const miss = await search.execute({ query: '神棍老师 戴佳伟' }, {});
+  assert.equal(miss.results.length, 1, '整串零命中应回退到逐词搜索');
+  assert.match(miss.results[0].text, /神棍老师/);
+  assert.deepEqual(search.output.schema.required, undefined, 'list 模式返回 docs，schema 不能强制 required results');
+  assert.ok(search.output.schema.properties.docs, 'schema 必须声明 docs');
+  const list = await search.execute({}, {});
+  assert.equal(list.docs.length, 1);
+  assert.equal(list.docs[0].title, '炉石传说：常见主播、梗与天梯术语');
+  assert.equal(list.total, 295, '列名单要带总篇数，避免"5 篇"误导');
+});
+
 test('member_*：lookup 按 openid/昵称，note 合并写入 members store', async () => {
   const upserts = [];
   const members = {

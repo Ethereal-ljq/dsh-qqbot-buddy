@@ -281,3 +281,7 @@ QQBOT_E2E=1 node --test test/e2e/real-dsh.test.js
 | R4 | 问「群友库里当前有哪些人」时，机器人不用群友库，反而用 grep/glob/read 去翻 `/home/qiqi/project/qqbot/members/index.json`（v1 遗留），并回答"数据来自 json、没上 sqlite" | `member_lookup` 只能按 openid/昵称查、没有"列名单"语义，模型只好翻文件；工具指引也没写明 SQLite 才是权威数据 | `member_lookup` 支持无参/**all=true 列出名单**（返回 total + 昵称/标签/备注）；指引明确"群友库/记忆/知识库在 SQLite，别翻 v1 json 目录" |
 
 R4 真机复测：模型调用 `member_lookup {}`，回答「一共42个，前20个是：朝咱、你会说大象话吗、…」（来自 SQLite 群友库）。
+
+| R5 | 问「你的知识库，对神棍老师和戴佳伟的印象」时回答"知识库里一条都没有"；问「知识库里有哪些内容」时回答"列表接口挂了" | `knowledge_search` 只有整串 query 检索，多词（带空格）FTS phrase 零命中且无逐词回退；且没有列文档模式（输出 schema 还强制 required results） | 检索拆词逐词回退；无 query/all=true 列文档（带 total 总篇数）；输出 schema 同时支持 results/docs；prompt 召回词拆分支持连接词与语气词（"那神棍老师和戴佳伟呢" → 神棍老师/戴佳伟） |
+
+R5 真机复测：`knowledge_search {all:true}` → 「知识库共 295 篇文档，列出最近 5 篇…」；`knowledge_search {query:"神棍老师 戴佳伟"}` → 命中「神棍老师麦迪文评价约定」等，回复结尾带「你们觉得呢」。

@@ -58,6 +58,10 @@ test('queryTerms：按空白/标点拆检索词，去重限长', () => {
   assert.deepEqual(queryTerms('hollow 吃什么？鱼鱼'), ['hollow', '吃什么', '鱼鱼']);
   assert.deepEqual(queryTerms('   '), []);
   assert.deepEqual(queryTerms('！？。'), []);
+  // 长中文串按连接词/句首功能词再拆：直接问"对神棍老师和戴佳伟的印象"也能命中实体词
+  const terms = queryTerms('对神棍老师和戴佳伟的印象');
+  assert.ok(terms.includes('神棍老师'), '应拆出 神棍老师: ' + JSON.stringify(terms));
+  assert.ok(terms.includes('戴佳伟'), '应拆出 戴佳伟: ' + JSON.stringify(terms));
 });
 
 test('多词回退：整句 FTS 零命中时逐词召回（记忆+知识）', async () => {
