@@ -25,8 +25,11 @@ test('控制台端到端：登录 → state → 建 bot → 读 schema/settings'
     autoStart: false,
     console: { enabled: true, host: '127.0.0.1', port: 0, token: 'test-token-v2' },
   });
+  // cordis 契约：async apply 的 resolve 值会被当作 effect；必须 undefined
+  assert.equal(runtime, undefined, 'apply 不能返回值（否则 cordis 抛 Invalid effect 并卸载插件）');
+  const rt = (await import('../lib/index.js')).getRuntime();
   try {
-    const address = runtime.console && runtime.console.address();
+    const address = rt.console && rt.console.address();
     assert.ok(address && address.port > 0, '控制台应监听随机端口');
     const base = 'http://127.0.0.1:' + address.port;
 
@@ -104,7 +107,7 @@ test('控制台端到端：登录 → state → 建 bot → 读 schema/settings'
       body: JSON.stringify({ reply: { mode: 'always' } }),
     });
     assert.equal(patched.status, 200);
-    const store = runtime.config.getSettings(bot.id);
+    const store = rt.config.getSettings(bot.id);
     assert.equal(store.reply.mode, 'always', '设置必须真正落到 profile 层');
 
     // 知识库（kb 已装配）：ingest + search
@@ -124,8 +127,8 @@ test('控制台端到端：登录 → state → 建 bot → 读 schema/settings'
     assert.ok(Array.isArray(search) && search.length >= 1, '中文检索应命中');
     assert.equal(search[0].mode, 'fts');
   } finally {
-    try { await runtime.console?.stop?.(); } catch { /* ignore */ }
-    try { runtime.db.close(); } catch { /* ignore */ }
+    try { await rt.console?.stop?.(); } catch { /* ignore */ }
+    try { rt.db.close(); } catch { /* ignore */ }
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
