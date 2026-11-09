@@ -9,8 +9,10 @@
 import type {
   AuditEntry, Binding, Bot, BotRuntime, ConsoleInfo, Health, IngestResult, KbDoc, KbHit,
   Member, Memory, Persona, Profile, SchemaItem, SchemaPayload, SchemaSection, SettingsPayload,
-  SkillItem, SkillPolicy, SkillsPayload, StateSnapshot, Sticker, ToolItem, ToolPolicy, ToolsPayload,
+  SkillItem, SkillPolicy, SkillsPayload, StateSnapshot, Sticker, StickerQuota, ToolItem, ToolPolicy,
+  ToolsPayload, MemoryHit,
 } from './types';
+import { setPath } from '../lib/objects';
 
 type Raw = Record<string, unknown>;
 
@@ -202,13 +204,27 @@ export function normSchema(raw: unknown): SchemaPayload {
   return { sections, items: list(val(r, 'items')).map(normSchemaItem) };
 }
 
+/**
+ * 设置值在接口层是扁平点号键（{ 'reply.mode': 'adaptive' }），
+ * 但 SchemaForm 按点号路径读取嵌套对象，这里统一还原成嵌套。
+ */
+function nestSettings(flat: Raw): Record<string, unknown> {
+  let out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(flat)) {
+    if (key.includes('.')) out = setPath(out, key, value);
+    else out[key] = value;
+  }
+  return out;
+}
+
 export function normSettings(raw: unknown): SettingsPayload {
   const r = rec(raw);
+  const botId = str(val(r, 'botId'), '');
   const values = val(r, 'values');
-  if (values !== undefined) return { botId: str(val(r, 'botId'), ''), values: rec(values) };
+  if (values !== undefined) return { botId, values: nestSettings(rec(values)) };
   const rest = { ...r };
   delete rest.botId;
-  return { botId: str(val(r, 'botId'), ''), values: rest };
+  return { botId, values: nestSettings(rest) };
 }
 
 export function normToolPolicy(raw: unknown): ToolPolicy {
@@ -295,6 +311,17 @@ export function normIngest(raw: unknown): IngestResult {
   };
 }
 
+export function normMemoryHit(raw: unknown): MemoryHit {
+  const base = normMemory(raw);
+  const r = rec(raw);
+  return {
+    ...base,
+    score: val(r, 'score') === undefined ? undefined : num(val(r, 'score')),
+    mode: val(r, 'mode') === undefined ? undefined : str(val(r, 'mode')),
+    snippet: val(r, 'snippet') === undefined ? undefined : str(val(r, 'snippet')),
+  };
+}
+
 export function normMemory(raw: unknown): Memory {
   const r = rec(raw);
   return {
@@ -329,10 +356,10 @@ export function normPersona(raw: unknown): Persona {
     id: str(val(r, 'id')),
     botId: val(r, 'botId') === undefined ? undefined : str(val(r, 'botId')),
     name: str(val(r, 'name')),
-    content: val(r, 'content') === undefined ? undefined : str(val(r, 'content')),
+    content: str(val(r, 'content')),
     active: bool(val(r, 'active'), false),
-    createdAt: val(r, 'createdAt') === undefined ? undefined : num(val(r, 'createdAt')),
-    updatedAt: val(r, 'updatedAt') === undefined ? undefined : num(val(r, 'updatedAt')),
+    createdAt: num(val(r, 'createdAt')),
+    updatedAt: num(val(r, 'updatedAt')),
   };
 }
 
@@ -345,8 +372,13 @@ export function normSticker(raw: unknown): Sticker {
     file: str(val(r, 'file')),
     emotion: val(r, 'emotion') === undefined || val(r, 'emotion') === null ? null : str(val(r, 'emotion')),
     hash: val(r, 'hash') === undefined || val(r, 'hash') === null ? null : str(val(r, 'hash')),
-    createdAt: val(r, 'createdAt') === undefined ? undefined : num(val(r, 'createdAt')),
+    createdAt: num(val(r, 'createdAt')),
   };
+}
+
+export function normStickerQuota(raw: unknown): StickerQuota {
+  const r = rec(raw);
+  return { day: str(val(r, 'day')), count: num(val(r, 'count')) };
 }
 
 export function normAudit(raw: unknown): AuditEntry {

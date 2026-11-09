@@ -1,7 +1,7 @@
 {
   "name": "dsh-qqbot-buddy",
   "version": "1.0.0-alpha.0",
-  "description": "DSH QQ 机器人插件 v2：独立管理控制台、配置档/会话级配置、可管理的工具与技能、SQLite+FTS5 记忆与知识库",
+  "description": "DSH QQ 机器人插件 v2：自包含管理控制台、配置档/会话级配置、可管理的工具与技能、SQLite+FTS5 记忆与知识库",
   "type": "module",
   "license": "MIT",
   "main": "./lib/index.js",
@@ -11,13 +11,17 @@
     "./package.json": "./package.json"
   },
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=24.0.0"
   },
   "scripts": {
     "test": "node --test test/*.test.js",
+    "setup:dev": "node scripts/setup-dev.mjs",
     "console:build": "npm --prefix web run build",
     "console:dev": "npm --prefix web run dev",
-    "setup:dev": "node scripts/setup-dev.mjs"
+    "dev:console": "node scripts/dev-console.mjs",
+    "install:local": "node scripts/install.mjs --local --spec .",
+    "install:plugin": "node scripts/install.mjs",
+    "build:web": "npm --prefix web run build"
   },
   "dependencies": {
     "@tencent-connect/qqbot-nodejs": "^1.0.5",
@@ -37,6 +41,38 @@
     },
     "client": {
       "platform": "web"
+    }
+  },
+  "bin": {
+    "dsh-qqbot-buddy-install": "./scripts/install.mjs"
+  },
+  "files": [
+    "lib/**",
+    "web/dist/**",
+    "docs/**",
+    "scripts/**",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
     }
   }
 }

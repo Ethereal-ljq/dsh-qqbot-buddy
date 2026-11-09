@@ -29,6 +29,7 @@ export function LoginPage() {
   const [health, setHealth] = useState<Health | null>(null);
   const [reachable, setReachable] = useState<'checking' | 'ok' | 'fail'>('checking');
   const [probeTick, setProbeTick] = useState(0);
+  const origin = typeof window === 'undefined' ? '127.0.0.1:6198' : window.location.host;
 
   useEffect(() => {
     let alive = true;
@@ -85,7 +86,7 @@ export function LoginPage() {
           </p>
 
           <div className="boot-log mono" aria-label="控制台启动信息">
-            <p className="boot-line"><span className="boot-key">控制台</span><span className="boot-val">127.0.0.1:6198</span></p>
+            <p className="boot-line"><span className="boot-key">控制台</span><span className="boot-val">{origin}</span></p>
             <p className="boot-line"><span className="boot-key">鉴权</span><span className="boot-val">会话 cookie · CSRF 头</span></p>
             <p className="boot-line"><span className="boot-key">数据</span><span className="boot-val">SQLite · FTS5 trigram</span></p>
             <p className="boot-line">
@@ -112,7 +113,7 @@ export function LoginPage() {
             <h1 className="login-title">登录控制台</h1>
             <p className="login-desc">
               输入控制台 token 建立会话。token 在插件首次启动时生成，保存在数据目录的
-              <code className="inline-code">console-token.txt</code>。
+              <code className="inline-code">console-token.txt</code>（默认位置在下方）。
             </p>
           </header>
 
@@ -156,7 +157,7 @@ export function LoginPage() {
 
           <footer className="login-foot">
             <p>连续失败 5 次会限速 5 分钟；会话有效期 7 天。</p>
-            <p className="mono login-foot-path">~/.dsh-qqbot/v2/console-token.txt</p>
+            <p className="mono login-foot-path">默认位置：~/.dsh-qqbot/v2/console-token.txt（可用 dataDir 覆盖）</p>
           </footer>
         </div>
       </section>

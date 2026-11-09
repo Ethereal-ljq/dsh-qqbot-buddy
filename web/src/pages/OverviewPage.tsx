@@ -6,12 +6,12 @@
 import { useState } from 'react';
 
 import { api, toApiError } from '../api/client';
-import { Badge, SourceTag, StatusDot, runtimeTone } from '../components/Status';
+import { Badge, StatusDot, runtimeTone } from '../components/Status';
 import { DataTable, type Column } from '../components/DataTable';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorNote } from '../components/ErrorNote';
 import { PageHeader } from '../components/PageHeader';
-import { fmtDuration, fmtNumber, fmtRelative, fmtTimeSmart, summarizeEvent, truncate } from '../lib/format';
+import { fmtDateTime, fmtDuration, fmtNumber, fmtTimeSmart, summarizeEvent, truncate } from '../lib/format';
 import { navigate } from '../router';
 import { useApp } from '../state/AppContext';
 import type { Bot } from '../api/types';
@@ -243,8 +243,7 @@ export function OverviewPage() {
                     <li className="event-item" key={event.seq}>
                       <span className="event-time mono">{fmtTimeSmart(event.at)}</span>
                       <span className="event-kind">
-                        <SourceTag source={event.event.split('/')[0]} />
-                        <span className="event-label">{EVENT_LABEL[event.event] || event.event}</span>
+                        <span className="tag event-tag">{EVENT_LABEL[event.event] || event.event}</span>
                       </span>
                       <span className="event-text" title={summarizeEvent(event.data)}>
                         {truncate(summarizeEvent(event.data) || '（无负载）', 90)}
@@ -258,7 +257,9 @@ export function OverviewPage() {
         </div>
       </div>
 
-      <p className="page-foot mono">快照时间 {state ? fmtRelative(state.console.startedAt) : '—'} 启动 · 刷新以获取最新状态</p>
+      <p className="page-foot mono">
+        控制台启动于 {fmtDateTime(state?.console.startedAt)} · 存在 SSE 事件时快照自动刷新
+      </p>
     </div>
   );
 }

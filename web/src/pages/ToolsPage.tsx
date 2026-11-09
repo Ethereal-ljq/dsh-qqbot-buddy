@@ -277,7 +277,17 @@ export function ToolsPage() {
         rows={toolRows}
         rowKey={(item) => item.name}
         loading={tools.loading}
-        empty={<EmptyState compact title={keyword ? '没有匹配的工具' : '没有发现工具'} description={keyword ? '换个关键词试试。' : '宿主插件或 MCP 装配后会出现在这里。'} />}
+        empty={(
+          <EmptyState
+            compact
+            tone="pending"
+            title={keyword ? '没有匹配的工具' : '宿主尚未装配工具发现服务'}
+            description={keyword
+              ? '换个关键词试试。'
+              : '当前可能是开发模式（deps.toolsDiscover 未装配）或宿主还没注册工具；装配后这里会列出全部工具、来源与可见性。'}
+            endpoint="GET /api/tools?profile=…"
+          />
+        )}
         footer={(
           <div className="table-foot-inner">
             <span className="muted">

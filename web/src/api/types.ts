@@ -203,6 +203,19 @@ export interface Memory {
   updatedAt?: number;
 }
 
+/** POST /api/memories/search 返回项：实体 + 检索元数据。 */
+export interface MemoryHit extends Memory {
+  score?: number;
+  mode?: string;
+  snippet?: string;
+}
+
+/** POST /api/memories 返回：实体 + 近似去重标记。 */
+export interface MemorySaveResult extends Memory {
+  created?: boolean;
+  deduped?: boolean;
+}
+
 export interface Member {
   id: number;
   botId?: string;
@@ -213,14 +226,28 @@ export interface Member {
   updatedAt?: number;
 }
 
+export interface MemberInput {
+  botId: string;
+  openid?: string;
+  nickname?: string | null;
+  note?: string | null;
+  profileJson?: unknown;
+}
+
 export interface Persona {
   id: string;
   botId?: string;
   name: string;
+  content: string;
+  active: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PersonaInput {
+  botId: string;
+  name: string;
   content?: string;
-  active?: boolean;
-  createdAt?: number;
-  updatedAt?: number;
 }
 
 export interface Sticker {
@@ -230,7 +257,20 @@ export interface Sticker {
   file: string;
   emotion?: string | null;
   hash?: string | null;
-  createdAt?: number;
+  createdAt: number;
+}
+
+export interface StickerInput {
+  botId: string;
+  name: string;
+  file: string;
+  emotion?: string;
+  hash?: string;
+}
+
+export interface StickerQuota {
+  day: string;
+  count: number;
 }
 
 export interface AuditEntry {

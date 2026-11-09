@@ -242,6 +242,36 @@ test('SSE：登录后收到 hello 并转发事件，断开后服务仍正常', a
   assert.equal(health.status, 200);
 });
 
+test('SSE 兼容 core/events 极简总线（与 lib/index.js 装配一致）', async (t) => {
+  const { createEvents } = await import('../lib/core/events.js');
+  const bus = createEvents();
+  const h = await createHarness({ deps: { events: bus } });
+  t.after(() => h.close());
+  await h.loginOk();
+
+  const target = new URL(h.baseUrl);
+  const chunks = [];
+  const req = http.get({
+    hostname: target.hostname,
+    port: target.port,
+    path: '/api/events',
+    headers: { cookie: h.cookie },
+  }, (res) => {
+    res.setEncoding('utf8');
+    res.on('data', (chunk) => chunks.push(chunk));
+  });
+  req.on('error', () => {});
+  t.after(() => { try { req.destroy(); } catch { /* ignore */ } });
+
+  await waitFor(() => chunks.join('').includes('event: hello'), 3000, '总线版 SSE hello');
+  bus.emit('bot/status', { botId: 'b1', status: 'ready' });
+  await waitFor(() => chunks.join('').includes('event: bot/status'), 3000, '总线版 bot/status');
+  assert.match(chunks.join(''), /"status":"ready"/);
+  req.destroy();
+  const health = await h.request('GET', '/api/health');
+  assert.equal(health.status, 200);
+});
+
 test('并发请求 + 两个 SSE 断开后事件监听数无泄漏', async (t) => {
   const h = await createHarness();
   t.after(() => h.close());

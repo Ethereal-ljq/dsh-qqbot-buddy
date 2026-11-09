@@ -240,3 +240,24 @@ prompt 组装（→ 0.3 契约）、工具白名单（→ 0.3）、web 路由（
 - M4 剩余：`lib/core/memory/collect.js`（提炼 job）、`lib/core/kb/ingest-url.js`（URL 入库，需 SSRF 防护）。
 - M3：QQ 传输层（qq-dev 进行中）。
 - M5：安装脚本、v1→v2 数据迁移器（v1 settings.json/记忆/知识库 → SQLite）。
+
+## 8. Node 24 与「插件自包含」约束
+
+用户主环境 Node **v24.22.2**（dsh 也装在该版本下），v2 按此对齐：
+
+- `package.json` `engines.node = ">=24.0.0"`；`node:sqlite` 在 Node 24 免实验 flag（实测 SQLite 3.53.4，FTS5 + trigram 可用）。
+- 开发机同时保留 Node 22.23.2；两个版本都跑过全量测试（`node --test test/*.test.js`），CI 以 Node 24 为准。
+- 软链脚本 `scripts/setup-dev.mjs` 会自动定位 **当前 Node 版本** 下的 dsh 安装（不再写死 22.x 路径）。
+
+**自包含清单（硬约束，后续改动不许破坏）**
+
+| 维度 | 约束 |
+|---|---|
+| 运行时依赖 | 只用 Node 内置模块 + 宿主提供的 `@deepseek-ai/*`（peerDependencies，全部 `optional: true`，**不由本包安装**） |
+| 数据库 | `node:sqlite`，禁止引入 better-sqlite3 等原生模块（避免编译/ABI 问题） |
+| 前端 | `web/dist` 构建产物**提交进仓库并打进 npm 包**；安装阶段零构建、零联网；只有改前端源码才需要 `npm run build:web` |
+| 控制台 | 插件进程内 HTTP 服务（无独立进程/容器/外部服务）；token/DB 全在 dataDir |
+| 数据 | 运行数据集中在 `<dataDir>`（默认 `~/.dsh-qqbot/v2`）；bot 工作区在 `<workspace>/bots/<botId>`；单目录可备份 |
+| 安装 | `npx github:...#v2` 或 `--local` 复制；安装器不跑前端构建（dist 缺失时才回退构建并明确告警） |
+
+**为什么不是「装一堆东西」**：用户是把它当 dsh 插件用，不是当平台。任何"要额外起服务/额外装编译链/额外拉前端包"的设计都算回退。

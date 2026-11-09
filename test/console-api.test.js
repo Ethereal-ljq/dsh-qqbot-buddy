@@ -339,10 +339,10 @@ test('memories：未装配内核时列表可读、写接口 501；装配后可�
   assert.equal(remove2.data.ok, true);
 });
 
-test('audit 列表、未实现资源 501、actions 转发', async (t) => {
+test('audit 列表、资源接口（members/personas/stickers 已实现）、actions 转发', async (t) => {
   const h = await createHarness();
   t.after(() => h.close());
-  await setupBot(h);
+  const bot = await setupBot(h);
 
   const audit = await h.request('GET', '/api/audit?limit=20');
   assert.equal(audit.status, 200);
@@ -351,11 +351,15 @@ test('audit 列表、未实现资源 501、actions 转发', async (t) => {
   assert.ok(audit.data.some((row) => row.kind === 'bot.create'));
   assert.equal(typeof audit.data[0].at, 'number');
 
-  const members = await h.request('GET', '/api/members');
-  assert.equal(members.status, 501);
-  assert.equal(members.data.error.code, 'not_implemented');
-  const stickers = await h.request('GET', '/api/stickers');
-  assert.equal(stickers.status, 501);
+  // M1 剩余资源已从 501 桩换成真实 store：空库应返回 200 + 裸数组
+  for (const endpoint of ['/api/members', '/api/personas', '/api/stickers']) {
+    const res = await h.request('GET', endpoint + '?bot=' + bot.id);
+    assert.equal(res.status, 200, endpoint + ' 应 200');
+    assert.deepEqual(res.data, [], endpoint + ' 空库应为空数组');
+  }
+  const noBot = await h.request('GET', '/api/members');
+  assert.equal(noBot.status, 400, '缺 bot 参数应 400');
+
   const actions = await h.request('POST', '/api/actions/start', { body: { botId: 'x' } });
   assert.equal(actions.status, 501);
 

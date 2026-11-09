@@ -20,12 +20,6 @@ const EVENT_LABEL: Record<string, string> = {
   message: '事件',
 };
 
-function eventText(event: { event: string; data: unknown }): string {
-  const label = EVENT_LABEL[event.event] || event.event;
-  const summary = summarizeEvent(event.data);
-  return summary ? label + ' · ' + summary : label;
-}
-
 function NavItem({ route, active, onClick }: { route: RouteDef; active: boolean; onClick: () => void }) {
   return (
     <a
@@ -50,6 +44,7 @@ export function Layout({ path, children }: { path: string; children: ReactNode }
   const consoleHost = state?.console.host || '127.0.0.1';
   const consolePort = state?.console.port || 6198;
   const latest = events[0];
+  const botHostOnline = state?.runtime.online ?? false;
 
   useEffect(() => { setNavOpen(false); }, [path]);
 
@@ -100,9 +95,13 @@ export function Layout({ path, children }: { path: string; children: ReactNode }
 
         <footer className="sidebar-foot">
           <div className="sf-line">
-            <StatusDot tone={health?.online === false ? 'danger' : 'ok'} pulse={sse === 'live'} />
-            <span>{health?.online === false ? '控制台离线' : '控制台在线'}</span>
+            <StatusDot tone={health ? 'ok' : 'warn'} pulse={sse === 'live'} />
+            <span>{health ? '控制台在线' : '控制台连接中'}</span>
             <span className="sf-version mono">v{version}</span>
+          </div>
+          <div className="sf-line sf-host">
+            <StatusDot tone={botHostOnline ? 'ok' : 'idle'} />
+            <span>机器人宿主{botHostOnline ? '在线' : '未连接'}</span>
           </div>
           <div className="sf-meta mono">{consoleHost}:{consolePort}</div>
           <div className="sf-meta">QQBot Buddy · dsh 插件</div>
@@ -155,7 +154,7 @@ export function Layout({ path, children }: { path: string; children: ReactNode }
             </span>
             <button
               type="button"
-              className={'btn btn-ghost btn-sm' + (loadingState ? ' busy' : '')}
+              className={'btn btn-ghost btn-sm refresh-btn' + (loadingState ? ' busy' : '')}
               onClick={() => void reloadState()}
               disabled={loadingState}
               title="刷新全局快照"
@@ -175,7 +174,7 @@ export function Layout({ path, children }: { path: string; children: ReactNode }
           {latest ? (
             <>
               <span className="rail-event mono">{EVENT_LABEL[latest.event] || latest.event}</span>
-              <span className="rail-text">{truncate(eventText(latest), 160)}</span>
+              <span className="rail-text">{truncate(summarizeEvent(latest.data) || '（无负载）', 160)}</span>
               <span className="rail-time mono">{fmtTimeSmart(latest.at)}</span>
             </>
           ) : (

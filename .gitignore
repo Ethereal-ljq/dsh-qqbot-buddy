@@ -1,6 +1,5 @@
 node_modules/
 web/node_modules/
-web/dist/
 *.log
 .work/
 data/

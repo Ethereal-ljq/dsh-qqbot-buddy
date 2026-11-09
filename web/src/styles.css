@@ -255,6 +255,7 @@ a { color: inherit; }
 }
 .sf-line { display: flex; align-items: center; gap: 6px; color: var(--ink-2); }
 .sf-version { margin-left: auto; font-size: 10px; color: var(--ink-3); }
+.sf-host { margin-top: 3px; font-size: 10.5px; color: var(--ink-3); }
 .sf-meta { margin-top: 3px; font-size: 10px; color: var(--ink-3); }
 .sf-meta + .sf-meta { margin-top: 1px; }
 
@@ -307,6 +308,7 @@ a { color: inherit; }
   gap: 10px;
 }
 .scope-select { display: flex; align-items: center; gap: 7px; }
+.topbar .nav-toggle { display: none; }
 .scope-select-label { font-size: 10.5px; letter-spacing: 0.04em; color: var(--ink-3); }
 .sse-pill {
   display: inline-flex;
@@ -1243,6 +1245,7 @@ a { color: inherit; }
 .login-desc { margin-top: 7px; font-size: 11.5px; line-height: 1.6; color: var(--ink-2); }
 .login-form { margin-top: 22px; }
 .token-row { display: flex; gap: 7px; margin-top: 6px; }
+.token-row .btn { height: 34px; }
 .token-input { flex: 1; height: 34px; }
 .login-submit { width: 100%; height: 34px; margin-top: 14px; }
 .login-error { margin-top: 8px; }
@@ -1321,15 +1324,19 @@ a { color: inherit; }
     cursor: pointer;
   }
   .nav-open .nav-scrim { display: block; }
-  .nav-toggle { display: inline-flex; }
+  .topbar .nav-toggle { display: inline-flex; }
   .content { padding: 16px 16px 48px; }
   .login { grid-template-columns: minmax(0, 1fr); }
   .login-left { display: none; }
 }
 @media (max-width: 760px) {
-  .topbar { gap: 8px; padding: 0 10px; }
+  .topbar { gap: 6px; padding: 0 10px; }
+  .topbar-right { gap: 5px; }
+  .topbar-right .btn { padding: 0 7px; }
   .crumb-group, .crumb-sep { display: none; }
+  .crumb-current { max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .scope-select-label { display: none; }
+  .scope-select .select-compact { max-width: 118px; }
   .sse-text { display: none; }
   .sse-pill { padding: 0 5px; }
   .rail { padding: 0 10px; }
@@ -1354,9 +1361,7 @@ a { color: inherit; }
   .login-right { padding: 28px 18px; }
 }
 @media (max-width: 520px) {
-  .readouts { grid-template-columns: minmax(0, 1fr); }
-  .readout { border-left: 0; border-top: 1px solid var(--hairline); }
-  .readout:first-child { border-top: 0; }
+  .refresh-btn { display: none; }
   .event-item { grid-template-columns: 56px minmax(0, 1fr); }
   .event-text { display: none; }
   .table-wrap { overflow-x: auto; }

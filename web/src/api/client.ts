@@ -8,14 +8,15 @@
  *  - 响应统一交给 api/normalize 收敛字段。
  */
 import type {
-  AuditEntry, Binding, Bot, BotInput, Health, IngestResult, KbDoc, KbHit, Member, Memory,
-  Persona, Profile, SchemaPayload, SessionInfo, SettingsPayload, SkillPolicy, SkillsPayload,
-  StateSnapshot, Sticker, ToolPolicy, ToolsPayload,
+  AuditEntry, Binding, Bot, BotInput, Health, IngestResult, KbDoc, KbHit, Member, MemberInput,
+  Memory, MemoryHit, MemorySaveResult, Persona, PersonaInput, Profile, SchemaPayload, SessionInfo,
+  SettingsPayload, SkillPolicy, SkillsPayload, StateSnapshot, Sticker, StickerInput, StickerQuota,
+  ToolPolicy, ToolsPayload,
 } from './types';
 import {
   normAudit, normBinding, normBot, normHealth, normIngest, normKbDoc, normKbHit, normMember,
-  normMemory, normPersona, normProfile, normSchema, normSettings, normSkills, normState,
-  normSticker, normTools,
+  normMemory, normMemoryHit, normPersona, normProfile, normSchema, normSettings, normSkills,
+  normState, normSticker, normStickerQuota, normTools,
 } from './normalize';
 
 const CSRF_HEADERS: Record<string, string> = { 'X-QQBot-CSRF': '1' };
@@ -247,31 +248,95 @@ export const api = {
     return (Array.isArray(raw) ? raw : []).map(normKbHit);
   },
 
-  // 记忆（M4 页面占位，接口先接好）
-  async listMemories(botId?: string, peer?: string, signal?: AbortSignal): Promise<Memory[]> {
-    const raw = await request<unknown>('/memories', { query: { bot: botId, peer }, signal });
+  // 记忆（bot 级共享；写操作走真实内核，近似去重）
+  async listMemories(
+    botId: string,
+    options: { peer?: string; kind?: string; limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<Memory[]> {
+    const raw = await request<unknown>('/memories', {
+      query: { bot: botId, peer: options.peer, kind: options.kind, limit: options.limit, offset: options.offset },
+      signal,
+    });
     return (Array.isArray(raw) ? raw : []).map(normMemory);
+  },
+  async createMemory(input: { botId: string; text: string; peer?: string; kind?: string; tags?: string[]; source?: string }): Promise<MemorySaveResult> {
+    const raw = await request<Record<string, unknown>>('/memories', { method: 'POST', body: input });
+    return {
+      ...normMemory(raw),
+      created: raw?.created === undefined ? undefined : Boolean(raw.created),
+      deduped: raw?.deduped === undefined ? undefined : Boolean(raw.deduped),
+    };
   },
   async deleteMemory(id: number): Promise<{ ok: boolean; id: number }> {
     return request('/memories/' + id, { method: 'DELETE' });
   },
-  async searchMemories(input: { botId: string; query: string; limit?: number }, signal?: AbortSignal): Promise<Memory[]> {
+  async searchMemories(input: { botId: string; query: string; limit?: number }, signal?: AbortSignal): Promise<MemoryHit[]> {
     const raw = await request<unknown>('/memories/search', { method: 'POST', body: input, signal });
-    return (Array.isArray(raw) ? raw : []).map(normMemory);
+    return (Array.isArray(raw) ? raw : []).map(normMemoryHit);
   },
 
-  // 群友库 / 人格卡 / 表情包（后续里程碑，占位页用）
-  async listMembers(botId?: string, signal?: AbortSignal): Promise<Member[]> {
-    const raw = await request<unknown>('/members', { query: { bot: botId }, signal });
+  // 群友库（按 bot 共享；profileJson 对象浅合并）
+  async listMembers(
+    botId: string,
+    options: { query?: string; limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<Member[]> {
+    const raw = await request<unknown>('/members', {
+      query: { bot: botId, q: options.query, limit: options.limit, offset: options.offset },
+      signal,
+    });
     return (Array.isArray(raw) ? raw : []).map(normMember);
   },
-  async listPersonas(botId?: string, signal?: AbortSignal): Promise<Persona[]> {
+  async saveMember(input: MemberInput): Promise<Member> {
+    return normMember(await request('/members', { method: 'POST', body: input }));
+  },
+  async updateMember(id: number, botId: string, patch: { nickname?: string | null; note?: string | null; profileJson?: unknown }): Promise<Member> {
+    return normMember(await request('/members/' + id, { method: 'PATCH', query: { bot: botId }, body: patch }));
+  },
+  async deleteMember(id: number, botId: string): Promise<{ ok: boolean; id: number }> {
+    return request('/members/' + id, { method: 'DELETE', query: { bot: botId } });
+  },
+
+  // 人格卡（同 bot 唯一 active；激活会同步 persona.md）
+  async listPersonas(botId: string, signal?: AbortSignal): Promise<Persona[]> {
     const raw = await request<unknown>('/personas', { query: { bot: botId }, signal });
     return (Array.isArray(raw) ? raw : []).map(normPersona);
   },
-  async listStickers(botId?: string, signal?: AbortSignal): Promise<Sticker[]> {
-    const raw = await request<unknown>('/stickers', { query: { bot: botId }, signal });
+  async createPersona(input: PersonaInput): Promise<Persona> {
+    return normPersona(await request('/personas', { method: 'POST', body: input }));
+  },
+  async updatePersona(id: string, botId: string, patch: { name?: string; content?: string }): Promise<Persona> {
+    return normPersona(await request('/personas/' + encodeURIComponent(id), { method: 'PATCH', query: { bot: botId }, body: patch }));
+  },
+  async deletePersona(id: string, botId: string): Promise<{ ok: boolean; id: string }> {
+    return request('/personas/' + encodeURIComponent(id), { method: 'DELETE', query: { bot: botId } });
+  },
+  async activatePersona(id: string, botId: string): Promise<Persona> {
+    return normPersona(await request('/personas/' + encodeURIComponent(id) + '/activate', { method: 'POST', body: { botId } }));
+  },
+
+  // 表情包（JSON 注册已有文件；按 hash 去重）
+  async listStickers(
+    botId: string,
+    options: { emotion?: string; limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<Sticker[]> {
+    const raw = await request<unknown>('/stickers', {
+      query: { bot: botId, emotion: options.emotion, limit: options.limit, offset: options.offset },
+      signal,
+    });
     return (Array.isArray(raw) ? raw : []).map(normSticker);
+  },
+  async addSticker(input: StickerInput): Promise<Sticker & { created?: boolean }> {
+    const raw = await request<Record<string, unknown>>('/stickers', { method: 'POST', body: input });
+    return { ...normSticker(raw), created: raw?.created === undefined ? undefined : Boolean(raw.created) };
+  },
+  async deleteSticker(id: number, botId: string): Promise<{ ok: boolean; id: number }> {
+    return request('/stickers/' + id, { method: 'DELETE', query: { bot: botId } });
+  },
+  async stickerQuota(botId: string, signal?: AbortSignal): Promise<StickerQuota> {
+    return normStickerQuota(await request('/stickers/quota', { query: { bot: botId }, signal }));
   },
 
   // 审计
