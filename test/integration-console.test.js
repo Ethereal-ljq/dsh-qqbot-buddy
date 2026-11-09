@@ -110,6 +110,17 @@ test('控制台端到端：登录 → state → 建 bot → 读 schema/settings'
     const store = rt.config.getSettings(bot.id);
     assert.equal(store.reply.mode, 'always', '设置必须真正落到 profile 层');
 
+    // actions：无凭据启动机器人 → 400 + 可读原因（错误码透传）
+    const startResp = await fetch(base + '/api/actions/start-bot', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json', 'X-QQBot-CSRF': '1' },
+      body: JSON.stringify({ botId: bot.id }),
+    });
+    assert.equal(startResp.status, 400, 'start-bot 无凭据应 400: ' + startResp.status);
+    const startBody = await startResp.json();
+    assert.equal(startBody.error.code, 'start_failed');
+    assert.match(startBody.error.message, /凭据|AppID|AppSecret|传输层/);
+
     // 知识库（kb 已装配）：ingest + search
     const ingest = await fetch(base + '/api/kb/ingest', {
       method: 'POST',
