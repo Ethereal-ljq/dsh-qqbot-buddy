@@ -76,6 +76,43 @@ function parseArgs(argv) {
   return out;
 }
 
+/** dsh 随附 profile 必须包含的基础 bundle；缺失时说明 profile 还没初始化。 */
+const REQUIRED_BUNDLES = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'];
+
+/** 读 profile manifest（不存在返回 null）。 */
+function readProfileManifest(profileDir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(profileDir, 'package.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** profile 是否需要从 dsh 随附模板初始化。 */
+function profileNeedsInit(profileDir) {
+  const manifest = readProfileManifest(profileDir);
+  if (!manifest) return true;
+  const bundles = manifest && manifest.dsh && manifest.dsh.profile && Array.isArray(manifest.dsh.profile.bundles)
+    ? manifest.dsh.profile.bundles
+    : [];
+  return REQUIRED_BUNDLES.some((name) => !bundles.includes(name));
+}
+
+/**
+ * 用 dsh 随附模板初始化 profile。
+ * 全新 DSH_HOME 直接安装会生成只含本插件的最小 profile（缺 dsh-base/dsh-web-app），
+ * dsh 启动时插件 pending 后退出——所以安装前必须先初始化。
+ */
+function initProfile(profile) {
+  log('初始化 profile（使用 dsh 随附模板）...');
+  const result = spawnDsh(['--profile', profile, '--dump-default-config'], { stdio: 'ignore' });
+  if (result.status !== 0) {
+    // 老版本 dsh 没有 --dump-default-config 时退回 --dump-config（同样会触发初始化）
+    const fallback = spawnDsh(['--profile', profile, '--dump-config'], { stdio: 'ignore' });
+    if (fallback.status !== 0) die('profile 初始化失败（dsh --profile ' + profile + ' --dump-config 退出码 ' + fallback.status + '）');
+  }
+}
+
 const dshHome = () => {
   const explicit = (process.env.DSH_HOME || '').trim();
   return explicit ? path.resolve(explicit) : path.join(os.homedir(), '.dsh');
@@ -207,7 +244,11 @@ function main() {
     return;
   }
 
-  // 0. 自包含前提：前端产物
+  // 0. profile 初始化（全新 DSH_HOME 必须；否则会缺 dsh-base/dsh-web-app）
+  if (profileNeedsInit(profileDir)) initProfile(opts.profile);
+  else log('profile 已初始化，跳过');
+
+  // 0.5 自包含前提：前端产物
   if (opts.build) buildConsole(root);
   else if (!distReady(root)) {
     warn('web/dist 不存在；将从源码构建（需要 web/node_modules）。生产包应自带 dist，跳过可用 --skip-check。');

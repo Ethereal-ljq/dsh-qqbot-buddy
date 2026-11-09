@@ -57,6 +57,11 @@ Web 管理控制台。你不需要额外部署数据库、消息队列或前端�
 `--local` 会跳过 `node_modules`、`.git`、`.work` 和顶层 `test`，不会经过 pnpm。
 前端源码改动后需要 `npm run build:web` 重建 `web/dist` 再本地安装。
 
+> 全新 DSH_HOME 无需手工初始化：安装器检测到 profile 不存在或缺少
+> `@deepseek-ai/dsh-base` / `@deepseek-ai/dsh-web-app` 时，会自动用 dsh 随附模板初始化
+> （等价的命令是 `dsh --profile web --dump-default-config`），然后再安装本插件。
+> 若你看到「初始化 profile（使用 dsh 随附模板）」说明走了这条路径。
+
 ### 1.3 安装后首次启动
 
 安装完成后**重启 dsh**（例如重新执行 `dsh web`），控制台随插件自动启动。
