@@ -68,6 +68,11 @@ AstrBot 的配置档只决定该 UMO 用哪套 provider/prompt；**对话上下�
 - 策略存 Profile：`tools: { mode: 'allow'|'deny', allow: [...], deny: [...], extra: [...] }`、
   `skills: { mode: 'all'|'allow', allow: [...] }`。
 - 控制台「工具与技能」页：列出全部发现项（含宿主新装插件带来的），一键放行/屏蔽，实时显示"当前会话可见性"。
+- **能力清单唯一真相**：`lib/tools/catalog.js`（`CAPABILITY_TOOLS` / `DEFAULT_CAPABILITIES` / `PLUGIN_TOOL_CAPABILITIES`）；
+  `lib/host/tools.js` 只 import 并执行策略，不再自己维护映射（避免两处漂移）。
+- **插件工具可见性**（agent scope 注册的 qqbot_*/memory_*/knowledge_*/member_*）采用 `deny > allow > 能力开关`：
+  显式 deny 永远屏蔽；显式 allow 可单独放行；否则看工具归属能力的默认值（默认拒绝新能力）。
+- **全局工具可见性**仍由 `tools.restrict({allow})` 决定（能力放行集合 ∩ 宿主真实存在 ∩ 去掉 deny）。
 - 技能仍用 v1 的 `skills.registerProvider()` 方案（按白名单过滤），但白名单来自 Profile。
 
 ### 0.4 目录管理：每个 bot 独立 cwd（dsh 原生支持，已确认）

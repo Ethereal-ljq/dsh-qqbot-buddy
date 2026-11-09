@@ -164,3 +164,27 @@ test('session-adapter：reset 释放 handle 并移除映射；resolveModelRouteF
   assert.equal(adapter.getSessionRecord('c2c', 'U1'), null);
   assert.equal(adapter.findBySessionId('sid-c2c:U1'), null);
 });
+test('session-adapter.reset 走 host BotRuntime.reset：epoch 轮换的结果原样透出（/new 真清空）', async () => {
+  const { adapter, botRuntime, sessions } = createAdapterRig();
+  const record = await adapter.getOrCreate('group', 'G1');
+  const calls = [];
+  botRuntime.reset = async (peer) => {
+    calls.push(peer);
+    sessions.delete(peer);
+    return { ok: true, epoch: 3, oldSessionId: 'sid-old', newSessionId: 'sid-new' };
+  };
+  const result = await adapter.reset('group', 'G1');
+  assert.deepEqual(calls, ['group:G1']);
+  assert.deepEqual(result, { resumable: 0, ok: true, epoch: 3, oldSessionId: 'sid-old', newSessionId: 'sid-new' });
+  assert.equal(adapter.getSessionRecord('group', 'G1'), null);
+  void record;
+});
+
+test('session-adapter.reset：host 未提供 reset 时退化为只释放当前会话', async () => {
+  const { adapter, sessions, disposed } = createAdapterRig();
+  await adapter.getOrCreate('c2c', 'U2');
+  const result = await adapter.reset('c2c', 'U2');
+  assert.deepEqual(result, { resumable: 0 });
+  assert.deepEqual(disposed, ['c2c:U2']);
+  assert.equal(sessions.size, 0);
+});

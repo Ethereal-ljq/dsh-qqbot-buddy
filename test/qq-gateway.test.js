@@ -27,8 +27,9 @@ function createFakeLogger(entries = []) {
 }
 
 // ── 假 SDK ────────────────────────────────────────────────
-function createFakeSdk() {
+function createFakeSdk({ startBehavior = 'ready' } = {}) {
   const factoryCalls = [];
+  const behaviors = { startBehavior };
   const makeMiddleware = (name) => (options) => {
     factoryCalls.push({ name, options });
     return async (ctx, next) => next();
@@ -63,7 +64,16 @@ function createFakeSdk() {
       for (const handler of this.handlers.get(event) || []) handler(...args);
     }
 
-    async start() { this.started = true; }
+    /** 模拟 SDK 长连接：start() 立刻 resolve，但 READY/ERROR 事件异步到达。 */
+    async start() {
+      this.started = true;
+      if (behaviors.startBehavior === 'ready') {
+        setImmediate(() => this.emitHandlers('ready'));
+      } else if (behaviors.startBehavior === 'error') {
+        setImmediate(() => this.emitHandlers('error', Object.assign(new Error('invalid app secret'), { code: 'token_invalid' })));
+      }
+      // silent：不发事件，用于验证 READY 超时
+    }
 
     stop() { this.stopped = true; }
 
@@ -80,6 +90,11 @@ function createFakeSdk() {
     async sendText(target, text) {
       return this.send({ target, msgType: 0, content: text });
     }
+
+    async sendImage(target, source) { this.calls.push({ method: 'sendImage', target, source }); return { message: { id: 'img-' + this.calls.length }, upload: {} }; }
+    async sendVideo(target, source) { this.calls.push({ method: 'sendVideo', target, source }); return { message: { id: 'vid' }, upload: {} }; }
+    async sendVoice(target, source) { this.calls.push({ method: 'sendVoice', target, source }); return { message: { id: 'voice' }, upload: {} }; }
+    async sendFile(target, source, opts) { this.calls.push({ method: 'sendFile', target, source, opts }); return { message: { id: 'file' }, upload: {} }; }
 
     /** 跑完整中间件链后再派发 message 事件（模拟 SDK 的洋葱模型）。 */
     async dispatchMessage(ctx) {
@@ -189,13 +204,18 @@ function createBotRuntime({ settings = {}, delivered = [] } = {}) {
   return botRuntime;
 }
 
-function createRig({ settings = {}, appSecret = 'secret-1', appId = 'app-1', sdk = createFakeSdk(), cfg } = {}) {
+function createRig({
+  settings = {}, appSecret = 'secret-1', appId = 'app-1',
+  sdk = createFakeSdk(), cfg, readyTimeoutMs, memoryCollector, members,
+} = {}) {
   const log = createFakeLogger();
   const ctx = createFakeCtx();
   const runtime = createRuntime({ appId, appSecret, cfg });
+  if (memoryCollector) runtime.memoryCollector = memoryCollector;
+  if (members) runtime.members = members;
   const delivered = [];
   const botRuntime = createBotRuntime({ settings, delivered });
-  const factory = createQqTransportFactory({ ctx, runtime, logger: log, sdk });
+  const factory = createQqTransportFactory({ ctx, runtime, logger: log, sdk, ...(readyTimeoutMs ? { readyTimeoutMs } : {}) });
   const transport = factory(botRuntime);
   return { log, ctx, runtime, delivered, botRuntime, factory, transport, sdk };
 }
@@ -415,5 +435,115 @@ test('出站：被动回复预算 4 次用满后自动走主动（不带 msg_id�
     assert.equal(instance.calls[i].target.msgId, 'msg-budget', '第 ' + (i + 1) + ' 条应走被动');
   }
   assert.equal(instance.calls[4].target.msgId, undefined, '第 5 条应去掉 msg_id 走主动');
+  await transport.stop();
+});
+// ── D. 连接状态准确性：READY / ERROR / 超时 ────────────────
+test('start() 等待 READY：连接成功后 ready=true', async () => {
+  const { transport } = createRig();
+  await transport.start();
+  assert.equal(transport.ready, true);
+  await transport.stop();
+  assert.equal(transport.ready, false);
+});
+
+test('连接前 ERROR：start() 立即 reject（带 SDK 错误信息）并清理实例', async () => {
+  const sdk = createFakeSdk({ startBehavior: 'error' });
+  const { transport } = createRig({ sdk });
+  await assert.rejects(() => transport.start(), /token_invalid|invalid app secret/);
+  assert.equal(transport.bot, null, '失败后应清理 QQBot 实例');
+});
+
+test('READY 超时：start() reject 超时错误（不无限等待）', async () => {
+  const sdk = createFakeSdk({ startBehavior: 'silent' });
+  const { transport } = createRig({ sdk, readyTimeoutMs: 100 });
+  await assert.rejects(() => transport.start(), /连接超时|READY/);
+  assert.equal(transport.bot, null);
+});
+
+// ── B. 记忆提炼接线：turn/end -> collector.noteTurnEnd({botId, transcript}) ──
+test('出站 turn/end 调用 memoryCollector.noteTurnEnd，并带完整 transcript', async () => {
+  const calls = [];
+  const memoryCollector = {
+    noteTurnEnd(record, extra = {}) { calls.push({ record, extra }); },
+  };
+  const { transport, ctx, botRuntime } = createRig({
+    settings: { reply: { enabled: true, memory: { autoExtractEvery: 10 } } },
+    memoryCollector,
+  });
+  await transport.start();
+  const instance = transport.bot;
+
+  // 入站一条消息（产生 record 与用户侧转录）
+  await instance.dispatchMessage({
+    message: { kind: 'c2c', content: '我最喜欢蓝色', messageId: 'm-mem', senderId: 'U-MEM' },
+    state: {},
+    receivedAt: Date.now(),
+    replyTarget: { scope: 'c2c', targetId: 'U-MEM', msgId: 'm-mem' },
+  });
+  await tick(10);
+  const record = botRuntime.sessions.get('c2c:U-MEM');
+  assert.ok(record, '入站应创建会话记录');
+
+  // 出站 turn/end（助手最终文本进转录 + 触发 collector）
+  const session = { header: { id: record.sessionId } };
+  ctx.emit('session/event', session, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '记住啦，你喜欢蓝色' }] } } });
+  ctx.emit('session/event', session, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
+  await tick(60);
+
+  assert.equal(calls.length, 1, 'turn/end 应调用一次 collector');
+  assert.equal(calls[0].extra.botId, 'bot-1');
+  assert.match(String(calls[0].extra.transcript), /用户: .*我最喜欢蓝色/, 'transcript 应包含用户侧原文');
+  assert.match(String(calls[0].extra.transcript), /助手: .*记住啦/, 'transcript 应包含助手侧最终文本');
+  assert.equal(record.settings && typeof record.settings, 'object', 'collector 调用前应刷新 record.settings');
+  await transport.stop();
+});
+// ── 群友库自动收录：runtime.members.upsert ──────────────────
+test('群聊入站自动 upsert 群友（runtime.members 已装配时）', async () => {
+  const upserts = [];
+  const members = { upsert(input) { upserts.push(input); return { openid: input.openid, created: true }; } };
+  const { transport } = createRig({ settings: { reply: { enabled: true, mode: 'mention' } }, members });
+  await transport.start();
+  await transport.bot.dispatchMessage({
+    message: { kind: 'group', content: '大家好', messageId: 'm-member', groupOpenid: 'G-M', senderId: 'U-M', senderName: '阿岚' },
+    state: { mention: { wasMentioned: true } },
+    receivedAt: Date.now(),
+  });
+  await tick(10);
+  assert.equal(upserts.length, 1);
+  assert.deepEqual(upserts[0], { botId: 'bot-1', openid: 'U-M', nickname: '阿岚' });
+  await transport.stop();
+});
+
+test('群友库 upsert 抛错只 warn，不影响消息投递', async () => {
+  const members = { upsert() { throw new Error('db locked'); } };
+  const { transport, delivered } = createRig({ settings: { reply: { enabled: true, mode: 'mention' } }, members });
+  await transport.start();
+  await transport.bot.dispatchMessage({
+    message: { kind: 'group', content: 'hi', messageId: 'm-member2', groupOpenid: 'G-M2', senderId: 'U-M2', senderName: '小明' },
+    state: { mention: { wasMentioned: true } },
+    receivedAt: Date.now(),
+  });
+  await tick(10);
+  assert.equal(delivered.length, 1, '群友库失败不应阻断聊天投递');
+  await transport.stop();
+});
+// ── 工具层通道：transport.messageSender / mediaSender ──────
+test('transport 暴露 messageSender/mediaSender 给工具层（sendCard / 媒体发送）', async () => {
+  const { transport } = createRig();
+  await transport.start();
+  const instance = transport.bot;
+
+  assert.equal(typeof transport.messageSender.sendCard, 'function');
+  assert.equal(typeof transport.mediaSender.sendImage, 'function');
+
+  await transport.messageSender.sendCard({ scope: 'c2c', targetId: 'U1', msgId: 'm1' }, {
+    title: '标题', description: '摘要', url: 'https://example.com/a',
+  });
+  assert.equal(instance.calls[0].msgType, 8, '图文卡片应走 msg_type=8');
+
+  await transport.mediaSender.sendImage({ scope: 'group', targetId: 'G1', msgId: 'm2' }, { localPath: '/tmp/x.png' });
+  const mediaCall = instance.calls.find((call) => call.method === 'sendImage');
+  assert.ok(mediaCall, '应调用 SDK sendImage');
+  assert.equal(mediaCall.target.msgId, 'm2');
   await transport.stop();
 });
