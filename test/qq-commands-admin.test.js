@@ -64,7 +64,7 @@ function makeContext(text, messageOverrides = {}) {
   };
 }
 
-async function runCommand({ settings, text, manager, bot, logger, adaptive, messageOverrides } = {}) {
+async function runCommand({ settings, text, manager, bot, logger, adaptive, messageOverrides, getVisibility } = {}) {
   const usedBot = bot || makeBot();
   const usedManager = manager || makeManager();
   const usedLogger = logger || makeLogger();
@@ -75,6 +75,7 @@ async function runCommand({ settings, text, manager, bot, logger, adaptive, mess
     stats: DEFAULT_STATS,
     getBot: () => usedBot,
     adaptive,
+    getVisibility,
   });
   const ctx = makeContext(text, messageOverrides);
   let nexted = false;
@@ -83,10 +84,10 @@ async function runCommand({ settings, text, manager, bot, logger, adaptive, mess
 }
 
 // ── 命令目录 ─────────────────────────────────────────────
-test('COMMAND_CATALOG：包含 9 条命令，字段完整，adminOnly 与 DESIGN 一致', () => {
+test('COMMAND_CATALOG：包含 11 条命令，字段完整，adminOnly 与 DESIGN 一致', () => {
   assert.ok(Array.isArray(COMMAND_CATALOG));
   assert.deepEqual(COMMAND_CATALOG.map((item) => item.name),
-    ['help', 'ping', 'status', 'id', 'new', 'reset', 'clear', 'resume', 'stop']);
+    ['help', 'ping', 'status', 'id', 'tools', 'skills', 'new', 'reset', 'clear', 'resume', 'stop']);
   for (const item of COMMAND_CATALOG) {
     assert.equal(typeof item.name, 'string');
     assert.equal(item.usage, '/' + item.name);
@@ -180,6 +181,42 @@ test('/id：展示昵称/openid，并按门控状态显示管理员身份', asyn
   // 门控开启但名单为空
   result = await runCommand({ settings: makeSettings({ admin: { enabled: true, openids: [], names: [] } }), text: '/id' });
   assert.ok(result.bot.sent[0].text.includes('名单为空'));
+});
+
+// ── /tools /skills：查看当前加载的工具与技能 ─────────────
+test('/tools：按插件/宿主分组列出可见工具，公开命令', async () => {
+  const getVisibility = async () => ({
+    source: 'agent',
+    tools: ['qqbot_send_file', 'memory_search', 'read', 'web_search'],
+    skills: [],
+  });
+  const result = await runCommand({ text: '/tools', getVisibility });
+  assert.equal(result.nexted, false, '命令应短路');
+  const text = result.bot.sent[0].text;
+  assert.ok(text.includes('当前已加载工具（4 个）'), text);
+  assert.ok(text.includes('QQ 插件工具：qqbot_send_file、memory_search'), text);
+  assert.ok(text.includes('宿主工具：read、web_search'), text);
+  assert.ok(text.includes('live 视图'), text);
+});
+
+test('/skills：列出可用技能与描述；无可见性依赖时返回清晰提示', async () => {
+  const getVisibility = async () => ({
+    source: 'agent',
+    tools: [],
+    skills: [
+      { name: 'bili-get', description: 'B 站视频信息/下载/字幕' },
+      { name: 'summary-card', description: '把总结渲染成图片卡片' },
+    ],
+  });
+  let result = await runCommand({ text: '/skills', getVisibility });
+  let text = result.bot.sent[0].text;
+  assert.ok(text.includes('可用技能（2 个）'), text);
+  assert.ok(text.includes('bili-get：B 站视频信息/下载/字幕'), text);
+  assert.ok(text.includes('summary-card'), text);
+
+  result = await runCommand({ text: '/skills' });
+  text = result.bot.sent[0].text;
+  assert.ok(text.includes('当前没有可用技能'), text);
 });
 
 // ── /help 由目录生成并标注管理员命令 ────────────────────
