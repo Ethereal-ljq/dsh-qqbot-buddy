@@ -60,6 +60,10 @@ test('工具指引只列可见工具', () => {
   assert.match(guide, /memory_save/);
   assert.doesNotMatch(guide, /web_search/);
   assert.equal(buildToolGuide([]), '');
+  // 数据类工具在场时要明确「SQLite 权威，别翻 v1 json」
+  const dataGuide = buildToolGuide([{ name: 'member_lookup' }]);
+  assert.match(dataGuide, /SQLite/);
+  assert.match(dataGuide, /member_lookup/);
 });
 
 test('sessionId/cwd 确定性', () => {

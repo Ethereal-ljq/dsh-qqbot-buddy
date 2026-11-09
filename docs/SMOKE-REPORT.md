@@ -277,3 +277,7 @@ QQBOT_E2E=1 node --test test/e2e/real-dsh.test.js
 ```
 
 新会话 `system/message` 实测 6942 chars，三段标记全部命中；全量测试 418/418；真实 dsh 探针 18/18、冒烟 19/19。
+
+| R4 | 问「群友库里当前有哪些人」时，机器人不用群友库，反而用 grep/glob/read 去翻 `/home/qiqi/project/qqbot/members/index.json`（v1 遗留），并回答"数据来自 json、没上 sqlite" | `member_lookup` 只能按 openid/昵称查、没有"列名单"语义，模型只好翻文件；工具指引也没写明 SQLite 才是权威数据 | `member_lookup` 支持无参/**all=true 列出名单**（返回 total + 昵称/标签/备注）；指引明确"群友库/记忆/知识库在 SQLite，别翻 v1 json 目录" |
+
+R4 真机复测：模型调用 `member_lookup {}`，回答「一共42个，前20个是：朝咱、你会说大象话吗、…」（来自 SQLite 群友库）。

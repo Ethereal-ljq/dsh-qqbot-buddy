@@ -79,15 +79,20 @@ test('member_*：lookup 按 openid/昵称，note 合并写入 members store', as
       assert.equal(botId, 'bot-1');
       return openid === 'U1' ? { openid: 'U1', nickname: '阿岚', note: '老朋友' } : null;
     },
-    list({ query }) { return query === '阿' ? [{ openid: 'U1', nickname: '阿岚', note: '' }] : []; },
+    list({ query }) { return query === '阿' || query === '' ? [{ openid: 'U1', nickname: '阿岚', note: '' }] : []; },
+    count() { return 1; },
     upsert(input) { upserts.push(input); return { created: true }; },
   };
   const defs = createDataTools({ members, botId: 'bot-1', manager, logger: silentLogger });
   const lookup = byName(defs, 'member_lookup');
   const one = await lookup.execute({ openid: 'U1' }, {});
-  assert.deepEqual(one.results, [{ openid: 'U1', nickname: '阿岚', note: '老朋友' }]);
+  assert.deepEqual(one.results, [{ openid: 'U1', nickname: '阿岚', note: '老朋友', tags: [] }]);
   const byNick = await lookup.execute({ nickname: '阿' }, {});
   assert.equal(byNick.results.length, 1);
+  // 不传参 = 列出群友库名单（模型问"群友库里有哪些人"时用）
+  const roster = await lookup.execute({}, {});
+  assert.ok(Array.isArray(roster.results) && roster.results.length >= 1);
+  assert.equal(roster.total, 1);
   const note = await byName(defs, 'member_note').execute({ openid: 'U1', note: '喜欢猫' }, {});
   assert.equal(note.created, true);
   assert.deepEqual(upserts[0], { botId: 'bot-1', openid: 'U1', note: '喜欢猫' });
