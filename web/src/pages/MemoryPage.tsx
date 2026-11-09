@@ -17,7 +17,7 @@ import { ErrorNote } from '../components/ErrorNote';
 import { Field } from '../components/Field';
 import { PageHeader } from '../components/PageHeader';
 import { Badge } from '../components/Status';
-import { fmtTimeSmart, truncate } from '../lib/format';
+import { fmtTimeSmart, searchModeLabel, searchModeTone, truncate } from '../lib/format';
 import { navigate } from '../router';
 import { useApp } from '../state/AppContext';
 import { useApi } from '../state/useApi';
@@ -256,9 +256,7 @@ export function MemoryPage() {
                       <span className="hit-title">{kindLabel(hit.kind)}记忆</span>
                       {hit.peer ? <span className="mono cell-sub">{hit.peer}</span> : null}
                       {hit.mode ? (
-                        <Badge tone={hit.mode === 'like' ? 'warn' : 'ok'} mono>
-                          {hit.mode === 'like' ? 'LIKE 回退' : 'FTS trigram'}
-                        </Badge>
+                        <Badge tone={searchModeTone(hit.mode)} mono>{searchModeLabel(hit.mode)}</Badge>
                       ) : null}
                     </div>
                     <p className="hit-text">{hit.snippet || hit.text}</p>

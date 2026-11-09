@@ -17,7 +17,7 @@ import { ErrorNote } from '../components/ErrorNote';
 import { Field } from '../components/Field';
 import { PageHeader } from '../components/PageHeader';
 import { Badge } from '../components/Status';
-import { fmtNumber, fmtTimeSmart, truncate } from '../lib/format';
+import { fmtNumber, fmtTimeSmart, searchModeLabel, searchModeTone, truncate } from '../lib/format';
 import { navigate } from '../router';
 import { useApp } from '../state/AppContext';
 import { useApi } from '../state/useApi';
@@ -242,9 +242,7 @@ export function KnowledgePage() {
                     <div className="hit-head">
                       <span className="hit-title">{hit.title || '未命名文档'}</span>
                       {hit.mode ? (
-                        <Badge tone={hit.mode === 'like' ? 'warn' : 'ok'} mono>
-                          {hit.mode === 'like' ? 'LIKE 回退' : 'FTS trigram'}
-                        </Badge>
+                        <Badge tone={searchModeTone(hit.mode)} mono>{searchModeLabel(hit.mode)}</Badge>
                       ) : null}
                       {hit.score !== undefined ? <span className="mono hit-score">score {hit.score.toFixed(3)}</span> : null}
                       {hit.docId !== undefined ? <span className="mono hit-doc">doc #{hit.docId}</span> : null}

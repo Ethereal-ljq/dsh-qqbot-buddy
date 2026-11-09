@@ -90,6 +90,24 @@ export function fmtNumber(value?: number | null): string {
   return value.toLocaleString('zh-CN');
 }
 
+/**
+ * 检索模式 → 中文标签。后端 mode 目前是 fts/like，后续可能新增 mixed；
+ * 未知值原样展示，避免把新语义误标成 FTS。
+ */
+export function searchModeLabel(mode?: string | null): string {
+  switch (String(mode || '').toLowerCase()) {
+    case 'fts': return 'FTS trigram';
+    case 'like': return 'LIKE 回退';
+    case 'mixed': return 'FTS + LIKE';
+    default: return mode || '';
+  }
+}
+
+/** 检索模式 → 徽标色调：LIKE 回退用 warn，其余正常。 */
+export function searchModeTone(mode?: string | null): 'ok' | 'warn' {
+  return String(mode || '').toLowerCase() === 'like' ? 'warn' : 'ok';
+}
+
 /** 去掉 undefined 的浅对象（用于 PUT body）。 */
 export function compact<T extends Record<string, unknown>>(input: T): T {
   const out: Record<string, unknown> = {};
