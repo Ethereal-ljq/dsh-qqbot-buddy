@@ -1,0 +1,37 @@
+# dsh-qqbot-buddy v2 bundle patch
+#
+# 安装：dsh plugin --profile <name> add <本包>
+# 本插件是官方 @tencent-connect/dsh-qqbot 的替代实现；安装后建议在 profile patch 里停用 im-qqbot。
+- insert:
+    - id: qqbot-buddy
+      name: dsh-qqbot-buddy
+      config:
+        dataDir: ''
+        workspaceRoot: ''
+        maxBots: 16
+        autoStart: true
+        debug: false
+        console:
+          enabled: true
+          host: 127.0.0.1
+          port: 6198
+          token: ''
+
+# agent preset：只负责 compaction；工具由插件按配置档策略动态装配
+- insert:
+    - id: preset-qqbot-buddy
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: qqbot-buddy
+        order: 11
+        plugins:
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
