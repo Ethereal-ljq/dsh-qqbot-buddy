@@ -35,6 +35,7 @@ test('默认能力：workspace/web/memory/stickers/vision 开，skills/imagegen 
   assert.ok(plan.allowSet.has('memory_save'));
   assert.ok(!plan.allowSet.has('skill'), '技能默认关闭');
   assert.ok(!plan.allowSet.has('generate_image'), '生图默认关闭');
+  assert.ok(!plan.allowSet.has('bash'), '命令执行(shell)默认关闭');
 });
 
 test('能力开关：关 workspace 后文件工具全部不可见', () => {
