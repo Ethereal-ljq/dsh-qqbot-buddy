@@ -127,7 +127,32 @@ test('工具挂载计划：能力开关决定挂哪些宿主插件', () => {
   assert.ok(!base.some((m) => m.capability === 'shell'), 'shell 默认关，不挂 bash');
   const shell = mountPlan({ tools: { capabilities: { shell: true } } });
   assert.ok(shell.some((m) => m.capability === 'shell' && m.moduleName === '@deepseek-ai/dsh-tool-bash'));
-  const minimal = mountPlan({ tools: { capabilities: { workspace: false, web: false, skills: false, shell: false } } });
+  const minimal = mountPlan({ tools: { capabilities: { workspace: false, vision: false, web: false, skills: false, shell: false } } });
   assert.deepEqual(minimal, []);
   assert.ok(CAPABILITY_MOUNTS.workspace.length > 0);
+});
+
+test('工具挂载计划：白名单（mode=allow + allow 非空）真正收窄宿主插件', () => {
+  const plan = mountPlan({ tools: { mode: 'allow', allow: ['read'], capabilities: { workspace: true, web: true, skills: true, shell: true } } });
+  const fsMount = plan.find((item) => item.moduleName.includes('tool-fs') && !item.moduleName.includes('search'));
+  assert.ok(fsMount, '应挂 fs 以提供 read');
+  assert.deepEqual(fsMount.config, { read: true, readImage: false, write: false, edit: false, applyPatch: false });
+  assert.ok(!plan.some((item) => item.moduleName.includes('fs-search')), 'glob/grep 未放行，不应挂 fs-search');
+  assert.ok(!plan.some((item) => item.moduleName.includes('tool-web')), 'web 未放行，不应挂 web');
+  assert.ok(!plan.some((item) => item.moduleName.includes('tool-skill')), 'skill 未放行，不应挂 skill');
+  assert.ok(!plan.some((item) => item.capability === 'shell'), 'bash 未放行，不应挂 shell');
+
+  // 白名单放行 web_search：web 插件只开 search，不挂 fs
+  const webPlan = mountPlan({ tools: { mode: 'allow', allow: ['web_search'], capabilities: { web: true } } });
+  assert.ok(!webPlan.some((item) => item.moduleName.includes('tool-fs')));
+  const webMount = webPlan.find((item) => item.moduleName.includes('tool-web'));
+  assert.deepEqual(webMount.config, { search: true, fetch: false });
+});
+
+test('工具挂载计划：deny 模式仍受能力开关约束，deny 优先', () => {
+  const plan = mountPlan({ tools: { mode: 'deny', deny: ['write'], capabilities: { workspace: true, vision: true, web: false } } });
+  const fsMount = plan.find((item) => item.moduleName.includes('tool-fs') && !item.moduleName.includes('search'));
+  assert.equal(fsMount.config.write, false, '写入应被 deny');
+  assert.equal(fsMount.config.read, true);
+  assert.ok(!plan.some((item) => item.moduleName.includes('tool-web')), 'web 能力关掉后不应挂载');
 });

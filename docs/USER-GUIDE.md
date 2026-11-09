@@ -301,6 +301,15 @@ v2 的默认姿态是"新东西不会自动进会话"：
 - 插件自带工具（qqbot_send_file、qqbot_send_sticker、qqbot_sticker_save、qqbot_send_card、
   qqbot_quote_reply、qqbot_describe_image 等）也受 deny 与能力开关控制。
 
+### 5.3.1 白名单语义与已知限制
+
+- **mode=allow 且放行列表非空 → 只放行列表内的工具**（插件工具与宿主工具同一套判定；显式放行可以越过能力开关）。
+- **mode=allow 且列表为空 → 退回能力开关**（默认配置的兼容行为）。
+- **mode=deny → 除黑名单外都放行，但仍受能力开关约束**；deny 永远优先于 allow。
+- 实际的挂载已按策略精确开关：fs（read/read_image/write/edit/apply_patch 逐项）、web（search/fetch 逐项）、skill/bash 按需。
+- **已知限制**：`glob`/`grep` 同属 fs-search 插件、不能单独开关——任一放行则两者都会出现。
+- 策略在**创建新会话时**应用：改完请发 `/new`（或控制台「重置会话」/重启该 bot）后再生效。
+
 ### 5.4 生效时机与技能
 
 - 工具策略在**创建新会话时**应用；改完请用 `/new`（或机器人页「重置会话」/重启该 bot）让策略生效，

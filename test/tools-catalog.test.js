@@ -53,18 +53,23 @@ test('resolveCapabilities：默认值 + 局部覆盖，非法值忽略', () => {
   assert.equal(caps.workspace, true);
 });
 
-test('isPluginToolEnabled：deny > allow > 能力开关', () => {
-  const settings = { tools: { capabilities: { stickers: false, vision: true, memory: false }, deny: ['qqbot_send_card'], allow: ['qqbot_sticker_save'] } };
-  assert.equal(isPluginToolEnabled({ settings, name: 'qqbot_sticker_save' }), true, 'allow 列表可越过能力开关');
-  assert.equal(isPluginToolEnabled({ settings, name: 'qqbot_send_file' }), false, '能力关闭则默认不注册');
-  assert.equal(isPluginToolEnabled({ settings, name: 'qqbot_send_card' }), false, 'deny 永远优先');
-  assert.equal(isPluginToolEnabled({ settings, name: 'qqbot_describe_image' }), true, 'vision 开启');
+test('isPluginToolEnabled：allow 非空时只放行列表内；空 allow 回退能力开关；deny 优先', () => {
+  const whitelist = { tools: { capabilities: { stickers: false, vision: true, memory: false }, deny: ['qqbot_send_card'], allow: ['qqbot_sticker_save'] } };
+  assert.equal(isPluginToolEnabled({ settings: whitelist, name: 'qqbot_sticker_save' }), true, '显式 allow 可越过能力开关');
+  assert.equal(isPluginToolEnabled({ settings: whitelist, name: 'qqbot_send_file' }), false, '不在白名单 -> 不注册');
+  assert.equal(isPluginToolEnabled({ settings: whitelist, name: 'qqbot_send_card' }), false, 'deny 永远优先');
+  assert.equal(isPluginToolEnabled({ settings: whitelist, name: 'qqbot_describe_image' }), false, '白名单外的工具即使能力开启也隐藏');
+  assert.deepEqual(enabledPluginTools(whitelist), ['qqbot_sticker_save'], '白名单非空时插件工具也只留列表内');
+
+  const capabilityOnly = { tools: { capabilities: { stickers: false, vision: true, memory: false }, deny: ['qqbot_send_card'] } };
+  assert.equal(isPluginToolEnabled({ settings: capabilityOnly, name: 'qqbot_sticker_save' }), false);
+  assert.equal(isPluginToolEnabled({ settings: capabilityOnly, name: 'qqbot_describe_image' }), true, 'vision 开启');
   assert.deepEqual(
-    enabledPluginTools(settings).sort(),
+    enabledPluginTools(capabilityOnly).sort(),
     [
-      'qqbot_describe_image', 'qqbot_quote_reply', 'qqbot_sticker_save',
+      'qqbot_describe_image', 'qqbot_quote_reply',
       'knowledge_read', 'knowledge_save', 'knowledge_search', 'member_lookup', 'member_note',
     ].sort(),
-    'memory 能力关闭 -> memory_* 跳过；knowledge/member 无独立能力开关 -> 保留',
+    '空 allow 回退能力开关：memory 能力关闭 -> memory_* 跳过；knowledge/member 无独立能力开关 -> 保留',
   );
 });

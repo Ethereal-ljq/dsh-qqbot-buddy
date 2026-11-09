@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   CAPABILITY_TOOLS, DEFAULT_CAPABILITIES, collectDiscovered, computePolicy, buildToolGuide,
 } from '../lib/host/tools.js';
+import { isToolAllowed } from '../lib/tools/catalog.js';
 import { botCwdOf, sessionIdFor } from '../lib/host/agent.js';
 
 function viewOf(names, restrictable) {
@@ -52,6 +53,21 @@ test('deny 模式：默认放行，显式 deny 优先', () => {
   assert.ok(plan.allowSet.has('read'));
   assert.ok(!plan.allowSet.has('write'));
   assert.ok(plan.allowSet.has('web_search'));
+});
+
+test('isToolAllowed：allow 非空时只放行列表内；空 allow 回退能力开关；deny 永远优先', () => {
+  const whitelist = { tools: { mode: 'allow', allow: ['read'], capabilities: { workspace: true, web: true } } };
+  assert.equal(isToolAllowed({ settings: whitelist, name: 'read' }), true);
+  assert.equal(isToolAllowed({ settings: whitelist, name: 'write' }), false, '白名单外的工具必须隐藏');
+  assert.equal(isToolAllowed({ settings: whitelist, name: 'web_search' }), false);
+  assert.equal(isToolAllowed({ settings: whitelist, name: 'qqbot_send_file' }), false, '插件工具同样受白名单约束');
+
+  const capabilityFallback = { tools: { mode: 'allow', allow: [], capabilities: { workspace: true, web: false } } };
+  assert.equal(isToolAllowed({ settings: capabilityFallback, name: 'read' }), true);
+  assert.equal(isToolAllowed({ settings: capabilityFallback, name: 'web_search' }), false);
+
+  const denyWins = { tools: { mode: 'allow', allow: ['read'], deny: ['read'] } };
+  assert.equal(isToolAllowed({ settings: denyWins, name: 'read' }), false, 'deny 优先于 allow');
 });
 
 test('工具指引只列可见工具', () => {
