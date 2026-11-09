@@ -50,12 +50,17 @@ AstrBot 的配置档只决定该 UMO 用哪套 provider/prompt；**对话上下�
 
 **v2 契约（写死，不许绕）**
 
-- 所有 prompt 贡献都在 **agent scope** 用唯一命名注册：`qqbot:persona`、`qqbot:toolguide`、
-  `qqbot:memory`……**绝不与宿主段同名**（需要替换宿主语义时显式使用宿主导出的 section 名并写明理由）。
+- 所有 prompt 贡献都在 **agent scope** 用唯一命名注册：`qqbot:persona`、`qqbot:guide`、
+  `qqbot:memory`、`qqbot:knowledge`、`qqbot:members`……**绝不与宿主段同名**
+  （需要替换宿主语义时显式使用宿主导出的 section 名并写明理由）。
 - 动态内容一律走 `systemPrompt.variable(name, provider)`，section 文本写 `{{qqbot_persona}}` 这类占位——
   每次 assembly 重新求值，天然解决"配置改了冷会话不生效"。
 - **禁止**监听 `system-prompt/assemble` 改写数组；禁止改 provider 对象。需要隐藏运行时上下文时用官方的
   `suppressRuntimeContext()`（作用于调用方 scope）+ 过滤 `team:*` 由注册而不是删改。
+- **召回契约**（2026-11-09 真机修复）：每轮召回 query 必须是**本轮用户原话**
+  （不能是拼了 `[Chat history]` 的整包 body——FTS trigram 是整串 phrase 匹配，长句基本零命中）；
+  群友库懒加载：只注入「当前发言人 + 本条消息里被提到的人」（昵称/别名最长匹配），绝不整库灌 prompt；
+  整句零命中时按空白/标点拆词逐词回退召回。
 - 工具可见性只走两条官方通道：`agentCtx.tools.restrict({ allow | deny })`（全局工具收窄）+
   agent-scope 注册（插件自带工具）。不做 assembly 后置过滤。
 - 回归验收：写一个 dsh 集成探针（`scripts/probe-tools.mjs`），流程 = 建会话 → 首轮 assembly →

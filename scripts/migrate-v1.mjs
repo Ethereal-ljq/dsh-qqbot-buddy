@@ -24,6 +24,7 @@ import { createConfigStore } from '../lib/core/config/store.js';
 import { createKbStore } from '../lib/core/kb/store.js';
 import { createMemoryStore } from '../lib/core/memory/store.js';
 import { createStickersStore } from '../lib/core/stickers/store.js';
+import { createMembersStore } from '../lib/core/members/store.js';
 
 const FLAG = '[migrate-v1]';
 const log = (msg) => process.stdout.write(FLAG + ' ' + msg + '\n');
@@ -36,6 +37,8 @@ function parseArgs(argv) {
     to: path.join(os.homedir(), '.dsh-qqbot', 'v2'),
     workspace: path.join(os.homedir(), 'my-bot'),
     v1cwd: '',
+    patch: '',
+    v1Bots: '',
     botName: '迁移机器人',
     dryRun: true,
   };
@@ -45,6 +48,8 @@ function parseArgs(argv) {
     else if (arg === '--to') out.to = path.resolve(argv[++i]);
     else if (arg === '--workspace') out.workspace = path.resolve(argv[++i]);
     else if (arg === '--v1-cwd') out.v1cwd = path.resolve(argv[++i]);
+    else if (arg === '--patch') out.patch = path.resolve(argv[++i]);
+    else if (arg === '--v1-bots') out.v1Bots = path.resolve(argv[++i]);
     else if (arg === '--bot-name') out.botName = argv[++i];
     else if (arg === '--apply') out.dryRun = false;
     else if (arg === '--dry-run') out.dryRun = true;
@@ -128,6 +133,14 @@ function mapSettings(v1, warnings) {
   if (auto.enabled === false) profile.memory.autoExtractEvery = 0;
   else if (auto.everyRounds !== undefined) profile.memory.autoExtractEvery = num(auto.everyRounds, 10);
 
+  const membersCfg = v1.members && typeof v1.members === 'object' ? v1.members : {};
+  profile.members = {};
+  if (membersCfg.enabled !== undefined) profile.members.enabled = Boolean(membersCfg.enabled);
+  if (membersCfg.injectSender !== undefined) profile.members.injectSender = Boolean(membersCfg.injectSender);
+  if (membersCfg.maxPerTurn !== undefined) profile.members.maxPerTurn = num(membersCfg.maxPerTurn, 3);
+  if (membersCfg.maxChars !== undefined) profile.members.maxChars = num(membersCfg.maxChars, 800);
+  if (Object.keys(profile.members).length === 0) delete profile.members;
+
   const stickers = v1.stickers && typeof v1.stickers === 'object' ? v1.stickers : {};
   if (stickers.dailyLimit !== undefined) profile.stickers = { dailyQuota: num(stickers.dailyLimit, 30) };
 
@@ -144,6 +157,31 @@ function mapSettings(v1, warnings) {
     warnings.push('口头禅 ' + v1.phrases.items.length + ' 条待接入（v2 规划中）');
   }
   return { profile, admin: adminPatch };
+}
+
+/** 从 v1 profile 的 cordis.patch.yml 里抠出 qqbot-buddy 的 appId/appSecret（避免引 yaml 依赖）。 */
+function readPatchCredentials(patchFile) {
+  try {
+    const text = fs.readFileSync(patchFile, 'utf8');
+    // 只取 qqbot-buddy 那段（到下一个顶层 "- " 或文件尾）
+    const start = text.search(/^- id: qqbot-buddy\b/m);
+    if (start < 0) return null;
+    const rest = text.slice(start);
+    const nextTop = rest.slice(1).search(/^\S/m) >= 0 ? rest.slice(1).search(/^- /m) : -1;
+    const block = nextTop >= 0 ? rest.slice(0, nextTop + 1) : rest;
+    const appId = (block.match(/appId:\s*['"]?([0-9A-Za-z_-]+)['"]?/) || [])[1] || '';
+    const appSecret = (block.match(/appSecret:\s*['"]?([0-9A-Za-z_-]+)['"]?/) || [])[1] || '';
+    return appId !== '' ? { appId, appSecret } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 读 v1 workspace 的 bots.json（机器人名/启用状态）。 */
+function readV1Bots(file) {
+  const data = readJson(file, null);
+  const list = data && Array.isArray(data.bots) ? data.bots : [];
+  return list.filter((item) => item && typeof item === 'object');
 }
 
 function main() {
@@ -169,6 +207,17 @@ function main() {
   const stickersDir = typeof v1.stickers?.dir === 'string' && v1.stickers.dir !== '' ? v1.stickers.dir : path.join(v1cwd, 'stickers');
   const knowledgeDir = path.join(v1cwd, 'knowledge');
 
+  // v1 凭据 / 机器人元数据（可选，用于"原地升级同一个 bot"）
+  const patchCreds = opts.patch ? readPatchCredentials(opts.patch) : null;
+  const v1Bots = opts.v1Bots
+    ? readV1Bots(opts.v1Bots)
+    : readV1Bots(path.join(v1cwd, 'bots.json'));
+  const primaryBot = v1Bots.find((item) => item.enabled !== false) || v1Bots[0] || null;
+  if (primaryBot && primaryBot.name && opts.botName === '迁移机器人') opts.botName = String(primaryBot.name);
+  const creds = patchCreds || (primaryBot && primaryBot.appId
+    ? { appId: String(primaryBot.appId), appSecret: '' }
+    : null);
+
   const counts = {
     persona: fs.existsSync(personaPath) ? 1 : 0,
     memoryFiles: listFiles(memoryDir).length,
@@ -180,6 +229,8 @@ function main() {
   log('v2 目标 : ' + opts.to + '  (workspace ' + opts.workspace + ')');
   log('bot     : ' + opts.botName + '  cwd=<workspace>/bots/<id>');
   log('迁移摘要: ' + JSON.stringify(counts));
+  log('机器人   : ' + opts.botName + (creds && creds.appId ? '  appId=' + creds.appId : '  (无凭据)')
+    + (creds && creds.appSecret ? '  appSecret=已读取' : ''));
   if (warnings.length > 0) {
     log('需要人工关注的项：');
     for (const item of warnings) log('  - ' + item);
@@ -197,11 +248,21 @@ function main() {
   const kb = createKbStore({ db });
   const memory = createMemoryStore({ db });
   const stickers = createStickersStore({ db, logger: { warn: (m) => warn(m), info: () => {}, debug: () => {} } });
+  const members = createMembersStore({ db });
 
   let bot = config.listBots().find((item) => item.name === opts.botName) || null;
   // 不指定 cwd：v2 约定 <workspace>/bots/<botId>，与 v1 目录隔离，迁移不会写回 v1 数据
   if (!bot) bot = config.createBot({ name: opts.botName });
   else log('bot 已存在，增量迁移: ' + bot.id);
+  // 凭据写进 v2 DB（v2 不再从 patch 读 appId/appSecret）
+  if (creds && creds.appId) {
+    bot = config.updateBot(bot.id, {
+      appId: creds.appId,
+      ...(creds.appSecret ? { appSecret: creds.appSecret } : {}),
+      ...(primaryBot && primaryBot.enabled !== undefined ? { enabled: Boolean(primaryBot.enabled) } : {}),
+    });
+    log('凭据已写入 bot: appId=' + bot.appId + (creds.appSecret ? '（appSecret 已保存）' : '（仅 appId）'));
+  }
 
   const botCwd = bot.cwd || path.join(opts.workspace, 'bots', bot.id);
   fs.mkdirSync(botCwd, { recursive: true });
@@ -243,6 +304,11 @@ function main() {
 
   let memoryCount = 0;
   let memorySource = '';
+  // 幂等：迁移来源标记为 v1-memory，重跑前清掉旧行，避免多跑几次成倍增长
+  try {
+    const cleared = db.prepare("DELETE FROM memories WHERE bot_id = ? AND source = 'v1-memory'").run(bot.id);
+    if (cleared && cleared.changes > 0) log('已清理上一次迁移的 v1-memory 行: ' + cleared.changes);
+  } catch (err) { warn('清理旧迁移记忆失败（忽略）: ' + errText(err)); }
   const indexFile = path.join(memoryDir, 'index.json');
   const index = readJson(indexFile, null);
   if (index && Array.isArray(index.facts)) {
@@ -274,17 +340,112 @@ function main() {
   }
   log('记忆已迁移: ' + memoryCount + ' 条（来源 ' + memorySource + '；文件已复制到 <bot cwd>/memory）');
 
-  // 知识库
+  // 知识库：v1 权威数据是 knowledge/entries/<id>.md（frontmatter + 正文），
+  // index.json 只是索引，绝不能当文档整块入库（历史上误入过，这里顺手清理）。
+  try {
+    const stale = kb.removeDoc({ botId: bot.id, source: 'v1:index.json' });
+    if (stale && stale.removed) log('已清理历史误入库的 knowledge/index.json');
+  } catch (err) { warn('清理历史知识库误入库失败（忽略）: ' + errText(err)); }
   let kbCount = 0;
-  for (const file of listFiles(knowledgeDir)) {
-    const ext = path.extname(file).toLowerCase();
-    if (!['.md', '.txt', '.markdown', '.json'].includes(ext)) continue;
-    try {
-      kb.ingest({ botId: bot.id, source: 'v1:' + path.relative(knowledgeDir, file), title: path.basename(file), text: fs.readFileSync(file, 'utf8') });
-      kbCount += 1;
-    } catch (err) { warn('知识库入库失败 ' + file + ': ' + errText(err)); }
+  const kbEntriesDir = path.join(knowledgeDir, 'entries');
+  const kbSources = [];
+  const kbFiles = listFiles(kbEntriesDir).filter((file) => file.toLowerCase().endsWith('.md'));
+  if (kbFiles.length > 0) {
+    for (const file of kbFiles) {
+      try {
+        const raw = fs.readFileSync(file, 'utf8');
+        const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+        const head = fm ? fm[1] : '';
+        const body = (fm ? raw.slice(fm[0].length) : raw).trim();
+        if (body === '') continue;
+        const titleLine = (head.match(/^title:\s*(.+)$/m) || [])[1] || path.basename(file, '.md');
+        const title = titleLine.trim().replace(/^["']|["']$/g, '').slice(0, 200);
+        const id = path.basename(file, '.md');
+        kb.ingest({ botId: bot.id, source: 'v1-kb:' + id, title, text: body });
+        kbSources.push(id);
+        kbCount += 1;
+      } catch (err) { warn('知识条目迁移失败 ' + file + ': ' + errText(err)); }
+    }
+  } else {
+    // 兼容没有 entries/ 的旧 workspace：直接迁移 md/txt 文件（跳过 index.json）
+    for (const file of listFiles(knowledgeDir)) {
+      const ext = path.extname(file).toLowerCase();
+      if (!['.md', '.txt', '.markdown'].includes(ext)) continue;
+      try {
+        kb.ingest({ botId: bot.id, source: 'v1:' + path.relative(knowledgeDir, file), title: path.basename(file), text: fs.readFileSync(file, 'utf8') });
+        kbCount += 1;
+      } catch (err) { warn('知识库入库失败 ' + file + ': ' + errText(err)); }
+    }
   }
-  log('知识库已迁移: ' + kbCount + ' 个文件');
+  log('知识库已迁移: ' + kbCount + ' 条（entries/*.md，源前缀 v1-kb:）');
+
+  // 群友库：权威数据在 members/entries/*.md 的 frontmatter（meta 是 JSON 字符串），
+  // index.json 不含 meta / openid，不能作为数据源。
+  let memberCount = 0;
+  const membersEntriesDir = path.join(opts.workspace, 'members', 'entries');
+  for (const file of listFiles(membersEntriesDir).filter((item) => item.toLowerCase().endsWith('.md'))) {
+    try {
+      const raw = fs.readFileSync(file, 'utf8');
+      const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      const head = fm ? fm[1] : '';
+      let meta = {};
+      const metaLine = (head.match(/^meta:\s*(\{.*\})\s*$/m) || [])[1];
+      if (metaLine) { try { meta = JSON.parse(metaLine); } catch { meta = {}; } }
+      const openid = typeof meta.openid === 'string' && meta.openid !== '' ? meta.openid : '';
+      if (openid === '') continue;
+      const titleLine = (head.match(/^title:\s*(.+)$/m) || [])[1] || '';
+      const tagsLine = (head.match(/^tags:\s*\[(.*)\]\s*$/m) || [])[1] || '';
+      const tags = tagsLine.split(',').map((item) => item.trim()).filter(Boolean);
+      const profileJson = {
+        ...(meta.profile && typeof meta.profile === 'object' ? meta.profile : {}),
+        aliases: Array.isArray(meta.aliases) ? meta.aliases : [],
+        tags,
+        groups: meta.groups && typeof meta.groups === 'object' ? meta.groups : {},
+        profileSource: meta.profileSource || '',
+      };
+      members.upsert({
+        botId: bot.id,
+        openid,
+        nickname: typeof meta.name === 'string' && meta.name !== '' ? meta.name : titleLine.trim(),
+        profileJson,
+      });
+      memberCount += 1;
+    } catch (err) { warn('群友迁移失败 ' + file + ': ' + errText(err)); }
+  }
+  log('群友库已迁移: ' + memberCount + ' 位（来源 members/entries/*.md）');
+
+  // 人格卡：personas/index.json 的 cards + 对应 md 文件
+  // 先清空 active 保证「同 bot 唯一 active」不变量（之前多次迁移出现过两个 active）
+  try { db.prepare('UPDATE personas SET active = 0 WHERE bot_id = ?').run(bot.id); } catch (err) { warn('重置人格卡 active 失败（忽略）: ' + errText(err)); }
+  let personaCardCount = 0;
+  let personaActiveSet = false;
+  const personasIndex = readJson(path.join(opts.workspace, 'personas', 'index.json'), null)
+    || readJson(path.join(v1cwd, 'personas', 'index.json'), null);
+  if (personasIndex && Array.isArray(personasIndex.cards)) {
+    const personasDir = path.dirname(path.join(opts.workspace, 'personas', 'index.json'));
+    for (const card of personasIndex.cards) {
+      if (!card || typeof card.id !== 'string' || card.id === '') continue;
+      try {
+        const file = path.join(personasDir, String(card.file || card.id + '.md'));
+        const content = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+        if (content.trim() === '') continue;
+        const active = personasIndex.activeId === card.id ? 1 : 0;
+        if (active === 1) personaActiveSet = true;
+        db.prepare(`INSERT OR REPLACE INTO personas(id, bot_id, name, content, active, created_at, updated_at)
+          VALUES(?,?,?,?,?,?,?)`)
+          .run(card.id, bot.id, String(card.name || card.id).slice(0, 80), content, active, Date.now(), Date.now());
+        personaCardCount += 1;
+      } catch (err) { warn('人格卡迁移失败 ' + card.id + ': ' + errText(err)); }
+    }
+  }
+  // 没有任何卡片被标为 active 时，用 persona.md 快照兜底（human 可读的那份）
+  if (!personaActiveSet) {
+    try {
+      const snap = db.prepare("SELECT id FROM personas WHERE bot_id = ? AND id = 'prs_migrated'").get(bot.id);
+      if (snap) db.prepare("UPDATE personas SET active = 1, name = COALESCE(NULLIF(name, ''), ?) WHERE id = 'prs_migrated' AND bot_id = ?").run('v1 人设快照', bot.id);
+    } catch (err) { warn('兜底激活人设快照失败（忽略）: ' + errText(err)); }
+  }
+  log('人格卡已迁移: ' + personaCardCount + ' 张' + (personaActiveSet ? '' : '（active 回落为 persona.md 快照）'));
 
   // 表情包
   let stickerCount = 0;

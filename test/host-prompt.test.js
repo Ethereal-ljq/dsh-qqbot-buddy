@@ -59,15 +59,15 @@ test('prompt 契约：只注册 qqbot:* 段 + 变量占位，不挂 assemble 事
   };
   const ok = composer.mount(fake.agentCtx, { id: 'agent-1' }, state);
   assert.equal(ok, true);
-  assert.equal(fake.sections.length, 4);
+  assert.equal(fake.sections.length, 5);
   for (const section of fake.sections) {
     assert.match(section.name, /^qqbot:/, '段名必须以 qqbot: 开头，避免 shadow 宿主段');
     assert.match(section.text, /^\{\{qqbot_[a-z]+\}\}$/, '段文本必须是变量占位，不能写死');
   }
   assert.deepEqual(fake.sections.map((s) => s.name), [
-    PROMPT_SECTIONS.persona, PROMPT_SECTIONS.guide, PROMPT_SECTIONS.memory, PROMPT_SECTIONS.knowledge,
+    PROMPT_SECTIONS.persona, PROMPT_SECTIONS.guide, PROMPT_SECTIONS.memory, PROMPT_SECTIONS.knowledge, PROMPT_SECTIONS.members,
   ]);
-  assert.equal(fake.variables.size, 4);
+  assert.equal(fake.variables.size, 5);
   assert.equal(fake.onCalls, 0, '禁止注册 system-prompt/assemble 监听');
   // 渲染：人设出现、空段被丢弃
   const text = render(fake);

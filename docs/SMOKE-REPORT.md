@@ -249,3 +249,31 @@ QQBOT_E2E=1 node --test test/e2e/real-dsh.test.js
 
 **最终判定：v2 在真实 dsh 0.2.2-rc.1（隔离 profile）上可安装、可加载、控制台可用、冷会话稳定，
 记忆/知识/工具接线生效；本次验收无未解决阻塞项。**
+
+---
+
+## 附：2026-11-09 真机 QQ 追加修复（migrate 到 qqbot profile 后）
+
+在 `~/.dsh/profiles/qqbot` 上把 v1 数据迁移进 v2 后，真实群聊/私聊暴露了 3 个集成问题（均已修复并回归）：
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| R1 | 私聊能回、群聊不回 | `session-adapter.getOrCreate` 丢掉入站 `replyTarget`（msgId）→ 出站退化为主动消息；群主动消息受权限限制 | 恢复 `replyTarget/senderId` 挂载 + 回归测试（`b711219`） |
+| R2 | 记忆/知识"没注入" | 召回 query 用了拼 chat history 的整包 body，FTS phrase 匹配零命中 | 入站把**用户原话** `recallQuery` 传到 `followup`；整句零命中按词回退 |
+| R3 | 群友库从未出现在 prompt | v2 没有 `qqbot:members` 段，也没有成员召回 | 新增 `qqbot:members` + 懒加载召回（发言人 + 被提到的人）+ `members.*` 设置（控制台「群友库」分节） |
+
+**真机验证（debug-followup 注入 + 会话 system/message 取证）**：
+
+```
+【群友】
+- 群友 你会说大象话吗：称呼 你会说大象话吗、爹、爹地；性格 活泼、爱吐槽、爱质疑；…；就是当前发言人
+- 群友 hollow：称呼 hollow；性格 绕弯试探、坚持追问、嘴硬爱顶；事迹 …
+- 群友 鱼尾：称呼 宝宝、鱼尾、肥鱼、鱼鱼；…
+【长期记忆】
+- 群友朝咱约定：以后群里有人问"吃什么"时，鱼鱼就回答"豆瓣番茄疙瘩面"。
+- …
+【知识库】
+《暗号规则：浮沉与hollow的专属》…
+```
+
+新会话 `system/message` 实测 6942 chars，三段标记全部命中；全量测试 418/418；真实 dsh 探针 18/18、冒烟 19/19。
