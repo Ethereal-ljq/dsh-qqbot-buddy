@@ -184,39 +184,58 @@ test('/id：展示昵称/openid，并按门控状态显示管理员身份', asyn
 });
 
 // ── /tools /skills：查看当前加载的工具与技能 ─────────────
-test('/tools：按插件/宿主分组列出可见工具，公开命令', async () => {
+test('/tools：markdown 清单区分已开启/未开启，按插件/宿主分组', async () => {
   const getVisibility = async () => ({
     source: 'agent',
     tools: ['qqbot_send_file', 'memory_search', 'read', 'web_search'],
+    disabledTools: [
+      { name: 'bash', reason: '能力「shell」未开启' },
+      { name: 'write', reason: '不在白名单' },
+    ],
     skills: [],
+    disabledSkills: [],
   });
   const result = await runCommand({ text: '/tools', getVisibility });
   assert.equal(result.nexted, false, '命令应短路');
   const text = result.bot.sent[0].text;
-  assert.ok(text.includes('当前已加载工具（4 个）'), text);
-  assert.ok(text.includes('QQ 插件工具：qqbot_send_file、memory_search'), text);
-  assert.ok(text.includes('宿主工具：read、web_search'), text);
+  assert.ok(text.includes('🔧 **工具清单**'), text);
+  assert.ok(text.includes('共 6 个 · 已开启 **4** · 未开启 **2**'), text);
+  assert.ok(text.includes('**✅ 已开启（4）**'), text);
+  assert.ok(text.includes('QQ 插件工具（2）：qqbot_send_file、memory_search'), text);
+  assert.ok(text.includes('宿主工具（2）：read、web_search'), text);
+  assert.ok(text.includes('**⛔ 未开启（2）**'), text);
+  assert.ok(text.includes('- **bash** — 能力「shell」未开启'), text);
+  assert.ok(text.includes('- **write** — 不在白名单'), text);
   assert.ok(text.includes('live 视图'), text);
 });
 
-test('/skills：列出可用技能与描述；无可见性依赖时返回清晰提示', async () => {
+test('/skills：markdown 清单区分已开启/未开启并标注仅手动技能', async () => {
   const getVisibility = async () => ({
     source: 'agent',
     tools: [],
     skills: [
-      { name: 'bili-get', description: 'B 站视频信息/下载/字幕' },
-      { name: 'summary-card', description: '把总结渲染成图片卡片' },
+      { name: 'bili-get', description: 'B 站视频信息/下载/字幕', modelInvocable: true },
+      { name: 'summary-card', description: '把总结渲染成图片卡片', modelInvocable: true },
+    ],
+    disabledTools: [],
+    disabledSkills: [
+      { name: 'browser-automation', description: '浏览器自动化', modelInvocable: true, reason: '不在技能白名单' },
+      { name: 'docx', description: 'Word 文档', modelInvocable: false, reason: '不在技能白名单' },
     ],
   });
   let result = await runCommand({ text: '/skills', getVisibility });
   let text = result.bot.sent[0].text;
-  assert.ok(text.includes('可用技能（2 个）'), text);
-  assert.ok(text.includes('bili-get：B 站视频信息/下载/字幕'), text);
-  assert.ok(text.includes('summary-card'), text);
+  assert.ok(text.includes('🧠 **技能清单**'), text);
+  assert.ok(text.includes('共 4 个 · 已开启 **2** · 未开启 **2**'), text);
+  assert.ok(text.includes('**✅ 已开启（2）**'), text);
+  assert.ok(text.includes('- **bili-get**：B 站视频信息/下载/字幕'), text);
+  assert.ok(text.includes('**⛔ 未开启（2）**'), text);
+  assert.ok(text.includes('- **browser-automation** — 不在技能白名单'), text);
+  assert.ok(text.includes('- **docx**（仅手动可用） — 不在技能白名单'), text);
 
   result = await runCommand({ text: '/skills' });
   text = result.bot.sent[0].text;
-  assert.ok(text.includes('当前没有可用技能'), text);
+  assert.ok(text.includes('当前没有可用的技能'), text);
 });
 
 // ── /help 由目录生成并标注管理员命令 ────────────────────
