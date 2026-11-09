@@ -85,16 +85,35 @@ test('search 契约：2 字回退 LIKE，>=3 字走 FTS，且按 bot 隔离', (t
   assert.equal(fts[0].mode, 'fts');
   assert.equal(fts[0].id, saved.id);
   assert.match(fts[0].snippet, /喜欢猫/);
-  assert.ok(fts[0].score >= 0);
+  // score 归一化到 [0,1]（单条命中给 1）；rawRank 保留原始 -bm25
+  assert.ok(fts[0].score >= 0 && fts[0].score <= 1);
+  assert.equal(fts[0].score, 1);
+  assert.ok(Number.isFinite(fts[0].rawRank) && fts[0].rawRank >= 0);
 
   const like = memory.search({ botId: 'bot-a', query: '喜欢' });
   assert.equal(like.length, 1);
   assert.equal(like[0].mode, 'like');
-  assert.ok(like[0].score > 0);
+  assert.ok(like[0].score > 0 && like[0].score <= 1);
+  assert.equal(like[0].rawRank, like[0].score);
 
   assert.equal(memory.search({ botId: 'bot-a', query: '喜欢狗' }).length, 0);
   assert.equal(memory.search({ botId: 'bot-b', query: '喜欢猫' }).length, 0);
   assert.deepEqual(memory.search({ botId: 'bot-a', query: '   ' }), []);
+});
+
+test('search score：fts 结果集内归一化到 [0,1]，rawRank 保留原始相关度', (t) => {
+  const { memory } = setup(t);
+  memory.save({ botId: 'bot-a', text: '周末去爬山' });
+  memory.save({ botId: 'bot-a', text: '周末去爬山和露营' });
+  const hits = memory.search({ botId: 'bot-a', query: '周末去爬山' });
+  assert.ok(hits.length >= 2);
+  for (const hit of hits) {
+    assert.ok(hit.score >= 0 && hit.score <= 1, 'score 应在 [0,1]');
+    assert.ok(Number.isFinite(hit.rawRank), 'rawRank 应为数字');
+    assert.equal(hit.mode, 'fts');
+  }
+  assert.equal(Math.max(...hits.map((hit) => hit.score)), 1);
+  assert.ok(hits[0].rawRank >= hits[hits.length - 1].rawRank, '结果应按 rawRank 倒序');
 });
 
 test('update 修改 text 后 FTS 同步，两种调用形式都支持', (t) => {

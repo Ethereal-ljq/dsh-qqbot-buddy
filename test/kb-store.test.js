@@ -68,7 +68,11 @@ test('search 契约：<3 字符回退 LIKE(mode:like)，>=3 字符走 bm25(mode:
   assert.equal(threeChar.length, 1);
   assert.equal(threeChar[0].mode, MODE_FTS);
   assert.equal(threeChar[0].docId, twoChar[0].docId);
-  assert.ok(threeChar[0].score >= 0);
+  // score 统一归一化到 [0,1]：单条命中给 1；rawRank 保留原始 -bm25 便于调试
+  assert.ok(threeChar[0].score >= 0 && threeChar[0].score <= 1);
+  assert.equal(threeChar[0].score, 1);
+  assert.ok(Number.isFinite(threeChar[0].rawRank) && threeChar[0].rawRank >= 0);
+  assert.equal(threeChar[0].titleHit, false);
   assert.ok(typeof threeChar[0].chunkId === 'number');
   assert.match(threeChar[0].snippet, /滨江公园/);
 });
@@ -109,7 +113,15 @@ test('search limit 生效，结果字段完整', (t) => {
   const hits = kb.search({ botId: 'bot-a', query: '性能测试', limit: 2 });
   assert.equal(hits.length, 2);
   for (const hit of hits) {
-    assert.deepEqual(Object.keys(hit).sort(), ['chunkId', 'docId', 'mode', 'score', 'snippet', 'text', 'title'].sort());
+    assert.deepEqual(
+      Object.keys(hit).sort(),
+      ['chunkId', 'docId', 'mode', 'rawRank', 'score', 'snippet', 'text', 'title', 'titleHit'].sort(),
+    );
+    assert.ok(hit.score >= 0 && hit.score <= 1, 'score 必须归一化到 [0,1]');
+    // 结果集内最大 score=1；min-max 有跨度时最小为 0，全等时统一 1
+    const scores = hits.map((row) => row.score);
+    assert.equal(Math.max(...scores), 1);
+    assert.ok(Math.min(...scores) === 0 || new Set(scores).size === 1);
   }
 });
 

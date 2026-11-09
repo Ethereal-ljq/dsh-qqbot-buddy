@@ -130,9 +130,11 @@ test('插件 apply 冒烟：建库/配置/宿主（控制台关闭）', async ()
     get: () => undefined,
     effect: (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); return () => {}; },
   };
-  const runtime = await apply(ctx, {
+  const applied = await apply(ctx, {
     dataDir: tmp, workspaceRoot: tmp, autoStart: false, console: { enabled: false }, debug: false,
   });
+  assert.equal(applied, undefined, 'apply 不能返回值（cordis effect 契约）');
+  const runtime = (await import('../lib/index.js')).getRuntime();
   assert.ok(fs.existsSync(path.join(tmp, 'buddy.db')));
   const bot = runtime.config.createBot({ name: '测试号' });
   assert.equal(runtime.config.getSettings(bot.id).reply.mode, 'adaptive');

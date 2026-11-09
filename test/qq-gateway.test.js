@@ -221,10 +221,24 @@ function createRig({
 }
 
 // ── 生命周期 ─────────────────────────────────────────────
-test('无凭据：start() 抛出可读错误（不产生未捕获异常）', async () => {
-  const { transport, sdk } = createRig({ appSecret: '' });
-  await assert.rejects(() => transport.start(), /凭据|appId\/appSecret/);
+test('无凭据：start() 抛出可读错误（缺哪个字段 / 去哪填 / 影响范围）', async () => {
+  const { transport, sdk, log } = createRig({ appSecret: '' });
+  await assert.rejects(() => transport.start(), (err) => {
+    assert.match(err.message, /缺少 AppSecret/);
+    assert.match(err.message, /控制台「机器人」页/);
+    assert.match(err.message, /其它机器人不受影响/, '应说明影响范围（只跳过 QQ 连接）');
+    return true;
+  });
   assert.equal(sdk.factoryCalls.length, 0, '无凭据时不应装配中间件');
+  assert.ok(log.byLevel('warn').some((args) => String(args[0]).includes('缺少 AppSecret')), '应有 warn 级日志说明跳过原因');
+});
+
+test('无凭据：AppID 与 AppSecret 都缺时两者都列出来', async () => {
+  const { transport } = createRig({ appId: '', appSecret: '' });
+  await assert.rejects(() => transport.start(), (err) => {
+    assert.match(err.message, /缺少 AppID \/ AppSecret/);
+    return true;
+  });
 });
 
 test('SDK 缺成员：start() 抛可读错误而不是崩在 requireSdk 深处', async () => {
@@ -449,14 +463,25 @@ test('start() 等待 READY：连接成功后 ready=true', async () => {
 test('连接前 ERROR：start() 立即 reject（带 SDK 错误信息）并清理实例', async () => {
   const sdk = createFakeSdk({ startBehavior: 'error' });
   const { transport } = createRig({ sdk });
-  await assert.rejects(() => transport.start(), /token_invalid|invalid app secret/);
+  await assert.rejects(() => transport.start(), (err) => {
+    assert.match(err.message, /invalid app secret|token_invalid/);
+    assert.match(err.message, /code=token_invalid/, '错误信息应带 SDK 错误码');
+    assert.match(err.message, /appId=app-1/, '错误信息应带 appId');
+    return true;
+  });
   assert.equal(transport.bot, null, '失败后应清理 QQBot 实例');
 });
 
-test('READY 超时：start() reject 超时错误（不无限等待）', async () => {
+test('READY 超时：start() reject 超时错误，提示含排查顺序与 appId（不无限等待）', async () => {
   const sdk = createFakeSdk({ startBehavior: 'silent' });
   const { transport } = createRig({ sdk, readyTimeoutMs: 100 });
-  await assert.rejects(() => transport.start(), /连接超时|READY/);
+  await assert.rejects(() => transport.start(), (err) => {
+    assert.match(err.message, /连接超时/);
+    assert.match(err.message, /排查顺序/);
+    assert.match(err.message, /AppID\/AppSecret/, '应提示检查凭据');
+    assert.match(err.message, /appId=app-1/, '应带上 appId 便于定位机器人');
+    return true;
+  });
   assert.equal(transport.bot, null);
 });
 
