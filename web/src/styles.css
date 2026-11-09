@@ -539,6 +539,7 @@ a { color: inherit; }
   white-space: pre-wrap;
 }
 .sub-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.cell-stack > .tag { align-self: flex-start; }
 .persona-preview {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1385,6 +1386,7 @@ a { color: inherit; }
 }
 @media (max-width: 520px) {
   .refresh-btn { display: none; }
+  .crumb { display: none; }
   .event-item { grid-template-columns: 56px minmax(0, 1fr); }
   .event-text { display: none; }
   .table-wrap { overflow-x: auto; }

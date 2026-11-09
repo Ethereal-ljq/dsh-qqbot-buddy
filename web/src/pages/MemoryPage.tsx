@@ -260,7 +260,6 @@ export function MemoryPage() {
                           {hit.mode === 'like' ? 'LIKE 回退' : 'FTS trigram'}
                         </Badge>
                       ) : null}
-                      {hit.score !== undefined ? <span className="mono hit-score">score {hit.score.toFixed(3)}</span> : null}
                     </div>
                     <p className="hit-text">{hit.snippet || hit.text}</p>
                   </li>
