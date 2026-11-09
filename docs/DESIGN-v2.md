@@ -73,7 +73,11 @@ AstrBot 的配置档只决定该 UMO 用哪套 provider/prompt；**对话上下�
 - 策略存 Profile：`tools: { mode: 'allow'|'deny', allow: [...], deny: [...], extra: [...] }`、
   `skills: { mode: 'all'|'allow', allow: [...] }`。
 - 控制台「工具与技能」页：列出全部发现项（含宿主新装插件带来的），一键放行/屏蔽，实时显示"当前会话可见性"。
-- **能力清单唯一真相**：`lib/tools/catalog.js`（`CAPABILITY_TOOLS` / `DEFAULT_CAPABILITIES` / `PLUGIN_TOOL_CAPABILITIES`）；
+- **能力边界（capability boundary）**：v1 在 prompt 里渲染【能力边界】段告诉模型每个能力的用法与结果交付
+  （如 imagegen：「生成后用 qqbot_send_file 把图片发给对方」）。v2 首版重写时漏掉该机制（catalog 无 boundary），
+  导致模型生图后不知道要发——2026-11-10 恢复为 `CAPABILITY_BOUNDARIES` + `buildToolGuide` 按可见能力动态渲染；
+  另在出站层加"生图结果自动补发"兜底（提示词是概率性的，自动化才稳）。
+- **能力清单唯一真相**：`lib/tools/catalog.js`（`CAPABILITY_TOOLS` / `CAPABILITY_BOUNDARIES` / `DEFAULT_CAPABILITIES` / `PLUGIN_TOOL_CAPABILITIES`）；
   `lib/host/tools.js` 只 import 并执行策略，不再自己维护映射（避免两处漂移）。
 - **插件工具可见性**（agent scope 注册的 qqbot_*/memory_*/knowledge_*/member_*）采用 `deny > allow > 能力开关`：
   显式 deny 永远屏蔽；显式 allow 可单独放行；否则看工具归属能力的默认值（默认拒绝新能力）。

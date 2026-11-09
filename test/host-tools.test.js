@@ -64,6 +64,13 @@ test('工具指引只列可见工具', () => {
   const dataGuide = buildToolGuide([{ name: 'member_lookup' }]);
   assert.match(dataGuide, /SQLite/);
   assert.match(dataGuide, /member_lookup/);
+  // 能力边界：可见能力才出现（v1 机制恢复）
+  const imgGuide = buildToolGuide([{ name: 'generate_image' }, { name: 'qqbot_send_file' }]);
+  assert.match(imgGuide, /【能力边界】/);
+  assert.match(imgGuide, /生成或编辑图片/);
+  assert.doesNotMatch(imgGuide, /联网搜索/, 'web 不可见时不应出现 web 边界');
+  const webGuide = buildToolGuide([{ name: 'web_search' }]);
+  assert.match(webGuide, /联网搜索/);
 });
 
 test('sessionId/cwd 确定性', () => {
