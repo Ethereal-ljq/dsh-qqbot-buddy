@@ -33,7 +33,8 @@ function parseArgs(argv) {
   const out = {
     // 注意：不要用 DSH_PROFILE（当前 shell 里它常指向其它 profile）；默认切 qqbot
     profile: 'qqbot',
-    workspace: '/home/qiqi/project/qqbot',
+    // 默认使用当前目录作为 workspace；迁移 v1 时请显式传 --workspace <旧工作区>
+    workspace: process.cwd(),
     v1State: path.join(os.homedir(), '.dsh-qqbot', 'buddy'),
     dataDir: path.join(os.homedir(), '.dsh-qqbot', 'v2'),
     consolePort: 6198,

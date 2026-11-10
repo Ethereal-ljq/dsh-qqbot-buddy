@@ -103,14 +103,31 @@ function profileNeedsInit(profileDir) {
  * 全新 DSH_HOME 直接安装会生成只含本插件的最小 profile（缺 dsh-base/dsh-web-app），
  * dsh 启动时插件 pending 后退出——所以安装前必须先初始化。
  */
-function initProfile(profile) {
-  log('初始化 profile（使用 dsh 随附模板）...');
-  const result = spawnDsh(['--profile', profile, '--dump-default-config'], { stdio: 'ignore' });
-  if (result.status !== 0) {
-    // 老版本 dsh 没有 --dump-default-config 时退回 --dump-config（同样会触发初始化）
-    const fallback = spawnDsh(['--profile', profile, '--dump-config'], { stdio: 'ignore' });
-    if (fallback.status !== 0) die('profile 初始化失败（dsh --profile ' + profile + ' --dump-config 退出码 ' + fallback.status + '）');
+/**
+ * 初始化一个还不存在的 profile。
+ *
+ * 注意：新版 dsh 的 --dump-default-config 要求 profile 已存在（不存在会报
+ * "profile does not exist; create it with dsh plugin --profile <name> add <package>"），
+ * 所以初始化统一走 dsh plugin add —— 它会在全新 DSH_HOME 里创建 profile 并登记基础 bundle。
+ * 本地安装用仓库路径交给 pnpm（随后 copyLocal 覆盖为纯文件副本），远程安装则直接 add 安装源。
+ */
+function initProfile(profile, opts, root) {
+  log('初始化 profile（dsh plugin add）...');
+  // 本地模式也走 tarball 安装：pnpm 会一并装好插件的运行期依赖（qrcode / qqbot-nodejs 等），
+  // 装完再用 copyLocal 覆盖成纯文件副本（不依赖仓库 node_modules）。
+  let spec = opts.spec;
+  let tarballDir = '';
+  if (opts.local) {
+    tarballDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-install-'));
+    const pack = spawnSync('npm', ['pack', '--pack-destination', tarballDir], { cwd: root, encoding: 'utf8' });
+    if (pack.status !== 0) die('本地打包失败（npm pack 退出码 ' + pack.status + '）');
+    const tgz = fs.readdirSync(tarballDir).find((name) => name.endsWith('.tgz'));
+    if (!tgz) die('本地打包失败（没找到 tgz）');
+    spec = path.join(tarballDir, tgz);
   }
+  const result = spawnDsh(['plugin', '--profile', profile, 'add', spec], { stdio: 'inherit' });
+  if (tarballDir !== '') fs.rmSync(tarballDir, { recursive: true, force: true });
+  if (result.status !== 0) die('profile 初始化失败（dsh plugin --profile ' + profile + ' add 退出码 ' + result.status + '）');
 }
 
 const dshHome = () => {
@@ -245,8 +262,10 @@ function main() {
   }
 
   // 0. profile 初始化（全新 DSH_HOME 必须；否则会缺 dsh-base/dsh-web-app）
-  if (profileNeedsInit(profileDir)) initProfile(opts.profile);
-  else log('profile 已初始化，跳过');
+  if (profileNeedsInit(profileDir)) {
+    if (opts.local) initProfile(opts.profile, opts, root);
+    else log('profile 未初始化：由下一步的 dsh plugin add 自动创建');
+  } else log('profile 已初始化，跳过');
 
   // 0.5 自包含前提：前端产物
   if (opts.build) buildConsole(root);

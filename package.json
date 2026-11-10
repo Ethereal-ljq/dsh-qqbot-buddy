@@ -4,6 +4,23 @@
   "description": "DSH QQ 机器人插件 v2：自包含管理控制台、配置档/会话级配置、可管理的工具与技能、SQLite+FTS5 记忆与知识库",
   "type": "module",
   "license": "MIT",
+  "homepage": "https://github.com/Ethereal-ljq/dsh-qqbot-buddy#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ethereal-ljq/dsh-qqbot-buddy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Ethereal-ljq/dsh-qqbot-buddy/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "qqbot",
+    "qq",
+    "agent",
+    "plugin"
+  ],
   "main": "./lib/index.js",
   "exports": {
     ".": "./lib/index.js",
