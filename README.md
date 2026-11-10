@@ -4,7 +4,7 @@
 支持配置档（Profile）/作用域绑定、可管理的工具与技能、SQLite + FTS5 长期记忆与知识库、
 群友库、人格卡与表情包，并提供多机器人隔离运行。
 
-- 适用版本：`1.0.0-alpha.0`（v2 分支）
+- 适用版本：`1.0.0-alpha.1`（v2 分支）
 - 运行环境：**Node.js ≥ 24**（使用内置 `node:sqlite`）、dsh 0.2.x
 - 依赖：QQ 官方机器人平台的 `appId` / `appSecret`（WebSocket 接入，无需公网回调）
 - npm：[dsh-qqbot-buddy](https://www.npmjs.com/package/dsh-qqbot-buddy)（当前 alpha 走 `@next` 标签）
@@ -207,7 +207,8 @@ QQ 开放平台 (WebSocket)
 ## 开发
 
 ```bash
-npm test                     # 单元测试（node --test，434 例）
+npm test                     # 单元测试（node --test，437 例）
+npm run verify:recall        # 真机验证记忆/知识库自动注入（需要控制台在线）
 npm run console:build        # tsc 严格检查 + vite 构建控制台
 npm run console:dev          # 控制台前端开发模式（代理到 6198）
 node scripts/dev-console.mjs # 只启动控制台后端（不连 QQ）

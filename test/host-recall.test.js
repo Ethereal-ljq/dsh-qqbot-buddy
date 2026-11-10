@@ -3,9 +3,43 @@ import assert from 'node:assert/strict';
 
 import {
   formatMemoryRecall, formatKnowledgeRecall, recallForPeer,
-  resolveMentionedMembers, formatMemberRecall, memberPromptLine, queryTerms,
+  resolveMentionedMembers, formatMemberRecall, memberPromptLine, queryTerms, queryCandidates,
 } from '../lib/host/recall.js';
 import { mountPlan, CAPABILITY_MOUNTS } from '../lib/host/tool-mounts.js';
+
+test('queryCandidates：问句剥掉疑问词得到核心短语', () => {
+  const list = queryCandidates('记忆暗号是什么？');
+  assert.ok(list.includes('记忆暗号'), '应包含核心短语: ' + JSON.stringify(list));
+  assert.ok(queryCandidates('你还记得我的暗号吗').some((term) => term === '暗号'), '应拆出「暗号」');
+  assert.ok(queryCandidates('请回答：记忆暗号是什么？知识库暗号是什么？').includes('知识库暗号'), '多问句应拆出第二个核心短语');
+  assert.deepEqual(queryCandidates(''), []);
+});
+
+test('记忆召回：问句「记忆暗号是什么」也能命中「记忆暗号是 X」', async () => {
+  const memory = {
+    recallForPrompt({ query }) {
+      return String(query).includes('记忆暗号') ? '【长期记忆】\n- 记忆暗号是蓝鲸三号' : '';
+    },
+  };
+  const out = await recallForPeer({
+    memory, knowledge: null, members: null, settings: { memory: { enabled: true }, kb: { enabled: false } },
+    botId: 'bot_x', query: '记忆暗号是什么？',
+  });
+  assert.ok(out.memoryText.includes('蓝鲸三号'), out.memoryText);
+});
+
+test('知识召回：问句整句零命中时用核心短语命中', async () => {
+  const knowledge = {
+    search({ query }) {
+      return String(query).includes('知识库暗号') ? [{ docId: 1, title: '暗号', text: '知识库暗号是 KX9' }] : [];
+    },
+  };
+  const out = await recallForPeer({
+    memory: null, knowledge, members: null, settings: { memory: { enabled: false }, kb: { enabled: true } },
+    botId: 'bot_x', query: '知识库暗号是什么？',
+  });
+  assert.ok(out.knowledgeText.includes('KX9'), out.knowledgeText);
+});
 
 test('记忆召回：按预算拼行，超预算截断', () => {
   const rows = [{ text: '用户喜欢猫' }, { text: '用户住杭州' }, { text: '用户是前端工程师' }];
