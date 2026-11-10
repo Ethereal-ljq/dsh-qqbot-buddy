@@ -7,6 +7,7 @@
 - 适用版本：`1.0.0-alpha.0`（v2 分支）
 - 运行环境：**Node.js ≥ 24**（使用内置 `node:sqlite`）、dsh 0.2.x
 - 依赖：QQ 官方机器人平台的 `appId` / `appSecret`（WebSocket 接入，无需公网回调）
+- npm：[dsh-qqbot-buddy](https://www.npmjs.com/package/dsh-qqbot-buddy)（当前 alpha 走 `@next` 标签）
 - 许可证：MIT
 
 ---
@@ -63,7 +64,23 @@
 - 已安装 dsh（`dsh --version` 可用），并初始化过至少一个 profile
 - QQ 官方机器人平台的 bot（获取 `appId`、`appSecret`，并在平台开启所需的群/私聊权限）
 
-### 方式一：从 GitHub 安装（推荐）
+### 方式一：npm 安装（推荐）
+
+```bash
+# 装到默认 web profile（当前是 alpha 版本，使用 @next 标签）
+dsh plugin --profile web add dsh-qqbot-buddy@next
+
+# 或装到指定 profile
+dsh plugin --profile qqbot add dsh-qqbot-buddy@next
+
+# 或使用安装器（自动校验/初始化 profile、登记 bundle、自检）
+npx -y --package=dsh-qqbot-buddy@next dsh-qqbot-buddy-install --profile qqbot
+```
+
+> 稳定版发布后可直接 `dsh plugin add dsh-qqbot-buddy`（不带 `@next`）。
+> 安装完成后**重启 dsh**，控制台随插件一起启动。
+
+### 方式二：从 GitHub 安装（无需 npm 账号）
 
 ```bash
 # 安装到默认 web profile
@@ -77,9 +94,8 @@ npx -y github:Ethereal-ljq/dsh-qqbot-buddy#v2 --dry-run
 ```
 
 安装器会完成：初始化/校验 profile → 安装插件与运行期依赖 → 登记进 `dsh.profile.bundles` → 自检。
-安装完成后**重启 dsh**，控制台随插件一起启动。
 
-### 方式二：本地开发安装
+### 方式三：本地开发安装
 
 ```bash
 git clone -b v2 https://github.com/Ethereal-ljq/dsh-qqbot-buddy.git

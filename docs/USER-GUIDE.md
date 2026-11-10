@@ -31,11 +31,23 @@ Web 管理控制台。你不需要额外部署数据库、消息队列或前端�
 
 ## 1. 安装、升级与卸载
 
-### 1.1 从 GitHub 安装（推荐）
+### 1.1 安装（npm 推荐 / GitHub 备选）
+
+**方式 A：npm（推荐）**
+
+    dsh plugin --profile web add dsh-qqbot-buddy@next
+    # 或指定 profile
+    dsh plugin --profile qqbot add dsh-qqbot-buddy@next
+    # 或使用安装器（自动初始化/校验 profile、登记 bundle、自检）
+    npx -y --package=dsh-qqbot-buddy@next dsh-qqbot-buddy-install --profile qqbot
+
+当前发布的是 `1.0.0-alpha.0`，使用 `@next` 标签；稳定版发布后可直接 `dsh plugin add dsh-qqbot-buddy`。
+
+**方式 B：从 GitHub 安装（无需 npm 账号）**
 
     npx -y github:Ethereal-ljq/dsh-qqbot-buddy#v2
 
-安装器会：把插件包装进 dsh profile（默认 `web`）→ 登记到 `dsh.profile.bundles` →
+安装器会：把插件装进 dsh profile（默认 `web`）→ 登记到 `dsh.profile.bundles` →
 用 `dsh --profile web --dump-config` 自检插件已进入插件树。安装过程**不构建前端、不联网拉前端依赖**。
 
 常用参数：
@@ -57,10 +69,10 @@ Web 管理控制台。你不需要额外部署数据库、消息队列或前端�
 `--local` 会跳过 `node_modules`、`.git`、`.work` 和顶层 `test`，不会经过 pnpm。
 前端源码改动后需要 `npm run build:web` 重建 `web/dist` 再本地安装。
 
-> 全新 DSH_HOME 无需手工初始化：安装器检测到 profile 不存在或缺少
-> `@deepseek-ai/dsh-base` / `@deepseek-ai/dsh-web-app` 时，会自动用 dsh 随附模板初始化
-> （等价的命令是 `dsh --profile web --dump-default-config`），然后再安装本插件。
-> 若你看到「初始化 profile（使用 dsh 随附模板）」说明走了这条路径。
+> 全新 DSH_HOME 无需手工初始化：安装器检测到 profile 不存在时，会用 `npm pack` 打出的
+> 插件包执行 `dsh plugin --profile <name> add <tgz>` 完成 profile 初始化并装齐运行期依赖，
+> 再把插件目录覆盖为纯文件副本（不依赖仓库 `node_modules`）。远程安装则由 `dsh plugin add`
+> 自动创建 profile。若你看到「初始化 profile（dsh plugin add）」说明走了这条路径。
 
 ### 1.3 安装后首次启动
 
