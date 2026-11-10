@@ -179,8 +179,7 @@ Web 管理控制台。你不需要额外部署数据库、消息队列或前端�
 > 顶栏右上角有 **「dsh Web ↗」** 按钮：一键打开当前 dsh 进程的 Web 界面（链接自带本进程的鉴权 token，无需再手抄）。
 > 注意：该 token 每次重启 dsh 都会变，因此按钮只在当前进程生命周期内有效；不要把带 token 的链接转发给别人。
 
-**反向入口（dsh Web → 控制台）**：插件同时带一个 dsh Web 客户端入口——安装本插件的
-web profile 会在页面右下角显示悬浮的 **「QQ 控制台」** 按钮，点击经同源路由 `/qqbot-dashboard`
+**反向入口（dsh Web → 控制台）**：安装本插件的 profile 会在 dsh Web 的**会话头部**（与右上角「在应用中打开 ↗」按钮并列）显示一个 **QQ 控制台** 图标按钮，点击经同源路由 `/qqbot-dashboard`
 302 到控制台（端口/地址跟随配置，不需要改前端）。若 web profile 只用于放入口、控制台跑在
 机器人 profile 里，可在该 profile 的 patch 配置里设 `console.enabled: false`（不重复启动控制台）
 并把 `console.port` 指向已有控制台端口即可。
