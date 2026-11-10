@@ -39,7 +39,7 @@ Web 管理控制台。你不需要额外部署数据库、消息队列或前端�
     # 或指定 profile
     dsh plugin --profile qqbot add dsh-qqbot-buddy@next
     # 或使用安装器（自动初始化/校验 profile、登记 bundle、自检）
-    npx -y --package=dsh-qqbot-buddy@next dsh-qqbot-buddy-install --profile qqbot
+    npx -y --package=dsh-qqbot-buddy@next dsh-qqbot-buddy-install --profile qqbot --spec dsh-qqbot-buddy@next
 
 当前发布的是 `1.0.0-alpha.0`，使用 `@next` 标签；稳定版发布后可直接 `dsh plugin add dsh-qqbot-buddy`。
 

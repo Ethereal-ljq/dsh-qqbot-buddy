@@ -74,7 +74,7 @@ dsh plugin --profile web add dsh-qqbot-buddy@next
 dsh plugin --profile qqbot add dsh-qqbot-buddy@next
 
 # 或使用安装器（自动校验/初始化 profile、登记 bundle、自检）
-npx -y --package=dsh-qqbot-buddy@next dsh-qqbot-buddy-install --profile qqbot
+npx -y --package=dsh-qqbot-buddy@next dsh-qqbot-buddy-install --profile qqbot --spec dsh-qqbot-buddy@next
 ```
 
 > 稳定版发布后可直接 `dsh plugin add dsh-qqbot-buddy`（不带 `@next`）。
