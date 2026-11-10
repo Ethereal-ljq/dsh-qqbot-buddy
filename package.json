@@ -32,6 +32,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
+    "prepublishOnly": "node --test test/*.test.js",
     "setup:dev": "node scripts/setup-dev.mjs",
     "console:build": "npm --prefix web run build",
     "console:dev": "npm --prefix web run dev",
