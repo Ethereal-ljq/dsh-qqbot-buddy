@@ -1,6 +1,6 @@
 {
   "name": "dsh-qqbot-buddy",
-  "version": "1.0.0-alpha.1",
+  "version": "1.0.0-alpha.2",
   "description": "DSH QQ 机器人插件 v2：自包含管理控制台、配置档/会话级配置、可管理的工具与技能、SQLite+FTS5 记忆与知识库",
   "type": "module",
   "license": "MIT",
@@ -25,6 +25,7 @@
   "exports": {
     ".": "./lib/index.js",
     "./console": "./lib/console/server.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "engines": {
@@ -57,6 +58,13 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-renderer"
+      ]
     }
   },
   "bin": {
