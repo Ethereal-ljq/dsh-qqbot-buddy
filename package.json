@@ -1,6 +1,6 @@
 {
   "name": "dsh-qqbot-buddy",
-  "version": "1.0.0-alpha.2",
+  "version": "1.0.0-alpha.3",
   "description": "DSH QQ 机器人插件 v2：自包含管理控制台、配置档/会话级配置、可管理的工具与技能、SQLite+FTS5 记忆与知识库",
   "type": "module",
   "license": "MIT",

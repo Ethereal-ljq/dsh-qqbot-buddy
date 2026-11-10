@@ -13,7 +13,7 @@ import { DataTable, type Column } from '../components/DataTable';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorNote } from '../components/ErrorNote';
 import { PageHeader } from '../components/PageHeader';
-import { Badge, SourceTag, StatusDot } from '../components/Status';
+import { SourceTag, StatusDot } from '../components/Status';
 import { Tabs } from '../components/Tabs';
 import { cloneValue } from '../lib/objects';
 import { truncate } from '../lib/format';
@@ -76,13 +76,25 @@ export function ToolsPage() {
   }, [tools.data, keyword]);
 
   const visibleNames = useMemo(() => {
-    if (tools.data?.visible && tools.data.visible.length > 0) return new Set(tools.data.visible);
-    return null;
+    if (!tools.data) return null;
+    return new Set(Array.isArray(tools.data.visible) ? tools.data.visible : []);
   }, [tools.data]);
+
+  /** 白名单为空时后端按能力开关放行（不是“全部禁止”）。 */
+  const toolAllowFallback = toolsDraft?.mode === 'allow' && toolsDraft.allow.length === 0;
+  const skillAllowFallback = skillsDraft?.mode !== 'all' && (skillsDraft?.allow.length ?? 0) === 0;
 
   const toggleTool = (name: string, list: 'allow' | 'deny') => {
     setToolsDraft((prev) => {
       if (!prev) return prev;
+      // 白名单为空 = 按能力开关放行；此时勾选/取消要以“当前可见集合”为基准，
+      // 否则随便勾一个就会把其它工具全部挡掉（旧行为）。
+      if (list === 'allow' && prev.mode === 'allow' && prev.allow.length === 0) {
+        const base = new Set(visibleNames ? [...visibleNames] : (tools.data?.items ?? []).map((item) => item.name));
+        if (base.has(name)) base.delete(name);
+        else base.add(name);
+        return { ...prev, allow: [...base] };
+      }
       const current = new Set(prev[list]);
       if (current.has(name)) current.delete(name);
       else current.add(name);
@@ -94,10 +106,11 @@ export function ToolsPage() {
     setToolsDraft((prev) => {
       if (!prev || !tools.data) return prev;
       if (action === 'clear') return { ...prev, allow: [], deny: [] };
-      const names = tools.data.items.filter((item) => item.restrictable !== false).map((item) => item.name);
-      return prev.mode === 'allow'
-        ? { ...prev, allow: names }
-        : { ...prev, deny: [] };
+      if (prev.mode === 'deny') return { ...prev, deny: [] };
+      // 白名单：以「当前生效可见」为基准生成列表，保留能力开关的现实结果；
+      // 不再只放 restrictable（否则 QQBot 插件工具会被顺手挡掉）。
+      const width = visibleNames ? [...visibleNames] : tools.data.items.map((item) => item.name);
+      return { ...prev, allow: [...new Set(width)] };
     });
   };
 
@@ -120,6 +133,13 @@ export function ToolsPage() {
   const toggleSkill = (name: string) => {
     setSkillsDraft((prev) => {
       if (!prev) return prev;
+      // 仅白名单 + 列表为空 = 全部技能可用；取消勾选要落成“全部减去它”，不能只留它一个
+      if (prev.mode === 'allow' && prev.allow.length === 0) {
+        const base = new Set((skills.data?.items ?? []).map((item) => item.name));
+        if (base.has(name)) base.delete(name);
+        else base.add(name);
+        return { ...prev, allow: [...base] };
+      }
       const current = new Set(prev.allow);
       if (current.has(name)) current.delete(name);
       else current.add(name);
@@ -161,14 +181,8 @@ export function ToolsPage() {
       render: (item) => <SourceTag source={item.source} />,
     },
     {
-      key: 'restrictable',
-      title: '可限制',
-      width: '88px',
-      render: (item) => (item.restrictable === false ? <Badge tone="warn">否</Badge> : <span className="muted">是</span>),
-    },
-    {
       key: 'visible',
-      title: '当前可见',
+      title: '已保存可见',
       width: '104px',
       render: (item) => {
         const visible = visibleNames
@@ -189,17 +203,24 @@ export function ToolsPage() {
       width: '88px',
       align: 'center',
       render: (item) => {
-        const list = toolsDraft?.mode === 'deny' ? 'deny' : 'allow';
-        const checked = toolsDraft ? toolsDraft[list].includes(item.name) : false;
-        const disabled = !toolsDraft || item.restrictable === false;
+        const usingDeny = toolsDraft?.mode === 'deny';
+        const list = usingDeny ? 'deny' : 'allow';
+        const fallback = !usingDeny && (toolsDraft?.allow.length ?? 0) === 0;
+        const inList = toolsDraft ? toolsDraft[list].includes(item.name) : false;
+        // 白名单为空时后端按能力开关放行：勾选态直接反映“当前是否生效可见”
+        const checked = fallback ? Boolean(visibleNames?.has(item.name)) : inList;
+        const disabled = !toolsDraft;
+        const title = fallback
+          ? '白名单为空：当前按能力开关放行；勾选/取消会以当前可见集合为基准生成白名单'
+          : (usingDeny ? '屏蔽该工具' : '放行该工具');
         return (
-          <label className={'check' + (disabled ? ' disabled' : '')} title={disabled ? '该工具不可限制' : undefined}>
+          <label className={'check' + (disabled ? ' disabled' : '')} title={title}>
             <input
               type="checkbox"
               checked={checked}
               disabled={disabled}
               onChange={() => toggleTool(item.name, list)}
-              aria-label={(list === 'deny' ? '屏蔽 ' : '放行 ') + item.name}
+              aria-label={(usingDeny ? '屏蔽 ' : '放行 ') + item.name}
             />
             <span className="check-box" aria-hidden="true" />
           </label>
@@ -232,7 +253,8 @@ export function ToolsPage() {
       align: 'center',
       render: (item) => {
         if (skillsDraft?.mode !== 'allow') return <span className="muted">全部</span>;
-        const checked = skillsDraft?.allow.includes(item.name) ?? false;
+        const fallback = (skillsDraft?.allow.length ?? 0) === 0;
+        const checked = fallback ? true : skillsDraft.allow.includes(item.name);
         return (
           <label className="check">
             <input
@@ -292,11 +314,13 @@ export function ToolsPage() {
           <div className="table-foot-inner">
             <span className="muted">
               策略：{toolsDraft.mode === 'allow' ? '白名单（只允许列表内）' : '黑名单（只屏蔽列表内）'}
-              {' · '}放行 {toolsDraft.allow.length} · 屏蔽 {toolsDraft.deny.length}
-              {' · '}额外 {toolsDraft.extra.length}
+              {toolsDraft.mode === 'allow'
+                ? (toolAllowFallback ? ' · 白名单为空 → 按能力开关放行' : ' · 放行 ' + toolsDraft.allow.length)
+                : ' · 屏蔽 ' + toolsDraft.deny.length}
+              {' · '}已保存策略下可见 {visibleNames ? visibleNames.size : '—'} 项
             </span>
-            {tools.data.visible?.length ? (
-              <span className="muted">宿主报告可见 {tools.data.visible.length} 项</span>
+            {toolAllowFallback ? (
+              <span className="muted">勾选/取消会以当前可见集合为基准生成白名单</span>
             ) : null}
           </div>
         )}
@@ -364,8 +388,8 @@ export function ToolsPage() {
             <div>
               <h2 className="panel-title">工具白名单</h2>
               <p className="panel-desc">
-                白名单模式下未勾选工具对 QQ 会话不可见；黑名单模式只屏蔽勾选项。工具可见性最终由 agent scope 的
-                restrict 执行。
+                白名单非空时只放行勾选工具（宿主工具与 QQBot 插件工具统一生效）；白名单为空时按能力开关放行；
+                黑名单只屏蔽勾选项。策略在创建新会话时应用：改完请发 /new 或重启该 bot。
               </p>
             </div>
             <div className="panel-tools">
@@ -420,7 +444,9 @@ export function ToolsPage() {
           <header className="panel-head">
             <div>
               <h2 className="panel-title">技能白名单</h2>
-              <p className="panel-desc">技能按 Profile 过滤；全部可见模式下不限制宿主注册的技能。</p>
+              <p className="panel-desc">
+                仅白名单模式下按配置档过滤模型侧技能目录；白名单为空时全部技能可用；改动同样在创建新会话时生效。
+              </p>
             </div>
             <div className="panel-tools">
               <div className="segmented">
@@ -472,7 +498,20 @@ export function ToolsPage() {
                 empty={<EmptyState compact title="没有技能" description="宿主注册技能后会出现。skills.registerProvider 只暴露白名单内技能。" />}
                 footer={(
                   <div className="table-foot-inner">
-                    <span className="muted">策略：{skillsDraft?.mode === 'all' ? '全部可见' : '仅白名单'} · 允许 {skillsDraft?.allow.length ?? 0} 个</span>
+                    <span className="muted">
+                      策略：{skillsDraft?.mode === 'all' ? '全部可见' : '仅白名单'}
+                      {skillsDraft?.mode === 'all'
+                        ? ''
+                        : (skillAllowFallback
+                          ? ' · 白名单为空 → 全部技能可用'
+                          : ' · 允许 ' + (skillsDraft?.allow.length ?? 0) + ' 个'
+                            + (() => {
+                              const items = new Set((skills.data?.items ?? []).map((item) => item.name));
+                              const invalid = (skillsDraft?.allow ?? []).filter((name) => !items.has(name));
+                              return invalid.length > 0 ? '（' + invalid.length + ' 个无效条目）' : '';
+                            })())}
+                      {' · '}清单 {skills.data?.items.length ?? 0} 项
+                    </span>
                   </div>
                 )}
               />
