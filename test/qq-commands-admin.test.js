@@ -420,7 +420,7 @@ test('handleCommand：/help 与 /id 在设置读取失败时降级为未启用',
 test('stripLeadingMentions：剥离 openid 形态的 @ 提及（SDK 只认纯数字）', async () => {
   const { stripLeadingMentions } = await import('../lib/qq/commands.js');
   // 新版 QQ 群：mention 用 openid（字母数字混合），SDK 的 <@!?\d+> 正则剥不掉
-  assert.equal(stripLeadingMentions('<@!5F23DAE1EBC75E95C88C160AC350A6A0> /new'), '/new');
+  assert.equal(stripLeadingMentions('<@!A1B2C3D4E5F60718> /new'), '/new');
   assert.equal(stripLeadingMentions('<@123456789> /help'), '/help');
   assert.equal(stripLeadingMentions('<@!a> <@!b> /status'), '/status');
   assert.equal(stripLeadingMentions('/ping'), '/ping');
