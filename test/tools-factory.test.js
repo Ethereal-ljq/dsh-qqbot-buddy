@@ -24,11 +24,25 @@ function createAgentCtx() {
   };
 }
 
-function createRuntime({ withOneShot = true, withStickers = false, withData = false } = {}) {
+function createRuntime({ withOneShot = true, withStickers = false, withData = false, withTts = false } = {}) {
   const runtime = {
     cfg: {},
     oneShot: withOneShot
       ? { async generate() { return { ok: true, text: '一张蓝色背景的图' }; } }
+      : null,
+    // TTS 引擎（core/tts，契约见 docs/MODELS-CENTER.md §6）；缺省时 qqbot_speak 降级不注册
+    tts: withTts
+      ? {
+        resolveSelection() {
+          return { provider: 'edge', providerId: 'tts_1', voice: 'zh-CN-XiaoxiaoNeural', style: '', speed: 1, maxChars: 300 };
+        },
+        async synthesizeForSettings() {
+          return {
+            ok: true, providerId: 'tts_1', kind: 'edge', model: 'edge-tts', voice: 'zh-CN-XiaoxiaoNeural',
+            format: 'mp3', filePath: '/tmp/fake-tts.mp3', bytes: 16, ms: 1, segments: 1, truncated: false, text: '你好',
+          };
+        },
+      }
       : null,
     stickers: withStickers
       ? {
@@ -165,6 +179,32 @@ test('agentCtx.tools 不可用时不抛错，返回空结果', async () => {
   const result = await factory({ agentCtx: {}, agent: {}, runtime: createBotRuntime(), settings: baseSettings, peer: 'c2c:U1', botId: 'bot-1' });
   assert.deepEqual(result, { registered: [], skipped: [] });
 });
+test('语音能力：默认关不注册 qqbot_speak；开启 voice 且 tts 已装配才注册', async () => {
+  // 1) 默认能力（voice=false）：即便 runtime.tts 已装配也不注册
+  const rig = createRig({ runtime: createRuntime({ withTts: true }) });
+  await run(rig);
+  let names = rig.botCtx.definitions.map((item) => item.name);
+  assert.ok(!names.includes('qqbot_speak'), 'voice 能力默认关闭，不应注册 qqbot_speak');
+
+  // 2) 显式开启 voice 能力 + tts 可用 -> 注册
+  const voiceOn = {
+    tools: { capabilities: { ...baseSettings.tools.capabilities, voice: true } },
+  };
+  const rig2 = createRig({ runtime: createRuntime({ withTts: true }) });
+  await run(rig2, voiceOn);
+  names = rig2.botCtx.definitions.map((item) => item.name);
+  assert.ok(names.includes('qqbot_speak'), '开启 voice 后应注册 qqbot_speak');
+  const speak = rig2.botCtx.definitions.find((item) => item.name === 'qqbot_speak');
+  assert.equal(typeof speak.execute, 'function');
+
+  // 3) 能力开了但 tts 未装配 -> 依赖缺失降级不注册
+  const rig3 = createRig({ runtime: createRuntime({ withTts: false }) });
+  const result3 = await run(rig3, voiceOn);
+  names = rig3.botCtx.definitions.map((item) => item.name);
+  assert.ok(!names.includes('qqbot_speak'), 'tts 缺失时应降级不注册');
+  assert.ok(!result3.skipped.includes('qqbot_speak'), '能力已开启，不属于「能力关闭跳过」');
+});
+
 test('数据类工具：memory/kb/members 已装配时注册 memory_* / knowledge_* / member_*', async () => {
   const rig = createRig({ runtime: createRuntime({ withStickers: true, withData: true }) });
   await run(rig);

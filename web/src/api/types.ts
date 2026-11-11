@@ -118,6 +118,8 @@ export interface SchemaItem {
   description?: string;
   widget?: string;
   values?: Array<{ value: string; label: string } | string>;
+  /** 动态下拉候选来源（SchemaForm 据此拉取 llmProviders / llmModels / ttsProviders）。 */
+  optionsFrom?: string;
   min?: number;
   max?: number;
   step?: number;
@@ -330,3 +332,142 @@ export interface PromptPreviewInput {
   query?: string;
   scope?: 'group' | 'c2c';
 }
+
+
+// ── 模型中心（docs/MODELS-CENTER.md §7）────────────────────────
+
+/** 模型类型插槽：status=ready 渲染成可编辑 tab，planned 归入「更多类型」。 */
+export interface ModelSlot {
+  id: string;
+  label: string;
+  status: 'ready' | 'planned';
+  /** ready 插槽对应的 settings schema 分节 id（llm→model / vision→vision / voice→voice）。 */
+  settingsSection?: string;
+  desc?: string;
+  /** planned 插槽的扩展点说明。 */
+  extend?: string;
+  icon?: string;
+}
+
+/** GET /api/models/slots：控制台 tab 的单一真相。 */
+export interface ModelSlotsPayload {
+  slots: ModelSlot[];
+  ready: string[];
+  planned: string[];
+}
+
+/** 宿主 LLM provider（GET /api/models/llm 的候选来源）。 */
+export interface LlmProvider {
+  id: string;
+  name: string;
+}
+
+/** 宿主 LLM 模型目录项。 */
+export interface LlmModel {
+  provider: string;
+  id: string;
+  name: string;
+  description?: string;
+  inputModalities?: string[];
+}
+
+/** GET /api/models/llm：宿主 llm 服务不可用时返回空目录 + warning，不报错。 */
+export interface LlmCatalog {
+  providers: LlmProvider[];
+  models: LlmModel[];
+  warning?: string;
+}
+
+/** TTS 字段下拉候选。 */
+export interface TtsOptionItem {
+  value: string;
+  label: string;
+}
+
+export type TtsFieldType = 'text' | 'textarea' | 'select' | 'number' | 'json';
+
+/** TTS kind 的表单字段元数据（控制台抽屉按 type 通用渲染）。 */
+export interface TtsField {
+  key: string;
+  label: string;
+  type: TtsFieldType;
+  /** 静态候选（select 用）。 */
+  options?: TtsOptionItem[];
+  /** 候选引用 kind 的 models / voices 列表（select 用）。 */
+  optionsFrom?: 'models' | 'voices';
+  required?: boolean;
+  placeholder?: string;
+  help?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  maxLength?: number;
+}
+
+/** TTS 供应商种类元数据（GET /api/models/tts/kinds）。 */
+export interface TtsKind {
+  id: string;
+  label: string;
+  short: string;
+  desc: string;
+  needsSecret: boolean;
+  secretLabel: string;
+  secretPlaceholder: string;
+  secretHelp: string;
+  defaultConfig: Record<string, unknown>;
+  models: TtsOptionItem[];
+  voices: TtsOptionItem[];
+  fields: TtsField[];
+  outputFormat: 'mp3' | 'wav';
+  maxCharsPerRequest: number;
+  timeoutMs: number;
+}
+
+/** 已配置的 TTS 供应商（脱敏视图：只有 hasSecret，不含 secret）。 */
+export interface TtsProvider {
+  id: string;
+  name: string;
+  kind: string;
+  kindLabel: string;
+  kindShort: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  hasSecret: boolean;
+  /** 模型 · 音色等一行摘要（后端拼好）。 */
+  summary: string;
+  outputFormat: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 新增/编辑 TTS 供应商入参；编辑时 secret 缺省或空串 = 保留原值。 */
+export interface TtsProviderInput {
+  name?: string;
+  kind?: string;
+  enabled?: boolean;
+  config?: Record<string, unknown>;
+  secret?: string;
+}
+
+/** GET /api/models/tts/providers。 */
+export interface TtsProviderList {
+  providers: TtsProvider[];
+  defaultProvider: string;
+}
+
+/** POST /api/models/tts/providers/:id/test 的试听结果。 */
+export interface TtsTestResult {
+  ok: boolean;
+  providerId: string;
+  kind: string;
+  model: string;
+  voice: string;
+  format: string;
+  bytes: number;
+  ms: number;
+  /** 音频 base64（无 data: 前缀）；超过 4MB 时后端省略并置 tooLarge。 */
+  audioBase64?: string;
+  mimeType?: string;
+  tooLarge?: boolean;
+}
+

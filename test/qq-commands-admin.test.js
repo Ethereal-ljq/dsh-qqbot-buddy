@@ -11,7 +11,8 @@ import {
   handleCommand,
 } from '../lib/qq/commands.js';
 
-const ADMIN_ONLY = ['new', 'reset', 'clear', 'resume', 'stop'];
+// /heal 会重新挂载会话工具（有副作用），与管理命令同属 adminOnly
+const ADMIN_ONLY = ['heal', 'new', 'reset', 'clear', 'resume', 'stop'];
 const DEFAULT_STATS = { received: 0, triggered: 0, skipped: 0, replies: 0, lastReplyAt: 0, lastTriggerReason: '' };
 
 function makeSettings(values) {
@@ -84,10 +85,10 @@ async function runCommand({ settings, text, manager, bot, logger, adaptive, mess
 }
 
 // ── 命令目录 ─────────────────────────────────────────────
-test('COMMAND_CATALOG：包含 11 条命令，字段完整，adminOnly 与 DESIGN 一致', () => {
+test('COMMAND_CATALOG：包含 12 条命令，字段完整，adminOnly 与 DESIGN 一致', () => {
   assert.ok(Array.isArray(COMMAND_CATALOG));
   assert.deepEqual(COMMAND_CATALOG.map((item) => item.name),
-    ['help', 'ping', 'status', 'id', 'tools', 'skills', 'new', 'reset', 'clear', 'resume', 'stop']);
+    ['help', 'ping', 'status', 'id', 'tools', 'skills', 'heal', 'new', 'reset', 'clear', 'resume', 'stop']);
   for (const item of COMMAND_CATALOG) {
     assert.equal(typeof item.name, 'string');
     assert.equal(item.usage, '/' + item.name);

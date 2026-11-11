@@ -1472,6 +1472,95 @@ a { color: inherit; }
   .preview-query { flex: 1 1 100%; min-width: 0; }
 }
 
+/* ── 模型中心（ModelsPage）─────────────────────────────────── */
+.models-profile { display: flex; align-items: center; gap: 8px; }
+.dynamic-select { display: flex; flex-direction: column; gap: 4px; }
+.dynamic-select .field-error { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
+.dynamic-select .link-btn { font-size: 10.5px; }
+
+.provider-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+.provider-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.provider-card.default { border-left-color: var(--accent); }
+.provider-card.disabled { opacity: 0.72; }
+.provider-card-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.provider-name { font-size: 12.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+.provider-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 10.5px; color: var(--ink-3); }
+.provider-summary { font-size: 10.5px; line-height: 1.45; color: var(--ink-2); overflow-wrap: anywhere; }
+.provider-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: auto; padding-top: 2px; }
+
+.test-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: 2px;
+  background: var(--surface);
+}
+.test-audio { width: 100%; height: 30px; }
+.test-meta { font-size: 10px; color: var(--ink-3); }
+
+.mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.mode-card.active { border-color: var(--accent); background: var(--accent-soft); }
+/* 视觉模式卡可直接点击切换（button 版）：去掉按钮默认外观，保留卡片观感 */
+button.mode-card { text-align: left; font: inherit; color: inherit; cursor: pointer; }
+button.mode-card:hover { border-color: var(--ink-3); }
+button.mode-card.active:hover { border-color: var(--accent); }
+button.mode-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mode-card-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mode-name { font-size: 12px; font-weight: 600; }
+.mode-desc { font-size: 11px; line-height: 1.55; color: var(--ink-2); }
+.mode-desc.muted { color: var(--ink-3); font-size: 10.5px; }
+
+.slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.slot-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 13px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.slot-card-head { display: flex; align-items: center; gap: 7px; }
+.slot-name { font-size: 12.5px; font-weight: 600; }
+.slot-desc { font-size: 11.5px; line-height: 1.5; color: var(--ink-2); }
+.slot-extend {
+  padding: 7px 8px;
+  border-left: 2px solid var(--line-strong);
+  background: var(--panel);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.slot-extend-label { display: block; margin-bottom: 2px; font-size: 9.5px; font-weight: 600; letter-spacing: 0.08em; color: var(--ink-3); }
+.slot-meta { font-size: 9.5px; color: var(--ink-3); }
+
+.hint-warning { max-width: 340px; font-size: 10.5px; line-height: 1.45; color: var(--warn); }
+
+@media (max-width: 760px) {
+  .mode-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* ── 响应式 ───────────────────────────────────────────────── */
 @media (max-width: 1180px) {
   .grid-main { grid-template-columns: minmax(0, 1fr); }

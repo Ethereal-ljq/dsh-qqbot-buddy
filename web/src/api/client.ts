@@ -8,15 +8,17 @@
  *  - 响应统一交给 api/normalize 收敛字段。
  */
 import type {
-  AuditEntry, Binding, Bot, BotInput, Health, IngestResult, KbDoc, KbHit, Member, MemberInput,
-  Memory, MemoryHit, MemorySaveResult, Persona, PersonaInput, Profile, PromptPreview, PromptPreviewInput,
-  SchemaPayload, SessionInfo, SettingsPayload, SkillPolicy, SkillsPayload, StateSnapshot, Sticker,
-  StickerInput, StickerQuota, ToolPolicy, ToolsPayload,
+  AuditEntry, Binding, Bot, BotInput, Health, IngestResult, KbDoc, KbHit, LlmCatalog, Member, MemberInput,
+  Memory, MemoryHit, MemorySaveResult, ModelSlotsPayload, Persona, PersonaInput, Profile, PromptPreview,
+  PromptPreviewInput, SchemaPayload, SessionInfo, SettingsPayload, SkillPolicy, SkillsPayload, StateSnapshot,
+  Sticker, StickerInput, StickerQuota, ToolPolicy, ToolsPayload, TtsKind, TtsProvider, TtsProviderInput,
+  TtsProviderList, TtsTestResult,
 } from './types';
 import {
-  normAudit, normBinding, normBot, normHealth, normIngest, normKbDoc, normKbHit, normMember,
-  normMemory, normMemoryHit, normPersona, normProfile, normPromptPreview, normSchema, normSettings,
-  normSkills, normState, normSticker, normStickerQuota, normTools,
+  normAudit, normBinding, normBot, normHealth, normIngest, normKbDoc, normKbHit, normLlmCatalog, normMember,
+  normMemory, normMemoryHit, normModelSlots, normPersona, normProfile, normPromptPreview, normSchema, normSettings,
+  normSkills, normState, normSticker, normStickerQuota, normTools, normTtsKinds, normTtsProvider,
+  normTtsProviderList, normTtsTestResult,
 } from './normalize';
 
 const CSRF_HEADERS: Record<string, string> = { 'X-QQBot-CSRF': '1' };
@@ -215,6 +217,34 @@ export const api = {
   },
   async saveSettings(botId: string | undefined, values: Record<string, unknown>): Promise<SettingsPayload> {
     return normSettings(await request('/settings', { method: 'PUT', query: { bot: botId }, body: { values } }));
+  },
+
+  // 模型中心（LLM / 视觉 / TTS 供应商 / 模型类型插槽；契约见 docs/MODELS-CENTER.md §7）
+  async modelSlots(signal?: AbortSignal): Promise<ModelSlotsPayload> {
+    return normModelSlots(await request('/models/slots', { signal }));
+  },
+  async llmCatalog(signal?: AbortSignal): Promise<LlmCatalog> {
+    return normLlmCatalog(await request('/models/llm', { signal }));
+  },
+  async ttsKinds(signal?: AbortSignal): Promise<TtsKind[]> {
+    return normTtsKinds(await request('/models/tts/kinds', { signal }));
+  },
+  async ttsProviders(signal?: AbortSignal): Promise<TtsProviderList> {
+    return normTtsProviderList(await request('/models/tts/providers', { signal }));
+  },
+  async createTtsProvider(input: TtsProviderInput): Promise<TtsProvider> {
+    return normTtsProvider(await request('/models/tts/providers', { method: 'POST', body: input }));
+  },
+  async updateTtsProvider(id: string, input: TtsProviderInput): Promise<TtsProvider> {
+    return normTtsProvider(await request('/models/tts/providers/' + encodeURIComponent(id), { method: 'PATCH', body: input }));
+  },
+  async deleteTtsProvider(id: string): Promise<{ ok: boolean; id: string }> {
+    return request('/models/tts/providers/' + encodeURIComponent(id), { method: 'DELETE' });
+  },
+  /** 合成一段测试语音；返回 base64 供页面 <audio> 试听。 */
+  async testTtsProvider(id: string, text?: string): Promise<TtsTestResult> {
+    const body = text !== undefined && text !== '' ? { text } : {};
+    return normTtsTestResult(await request('/models/tts/providers/' + encodeURIComponent(id) + '/test', { method: 'POST', body }));
   },
 
   // tools / skills（按 profile）

@@ -11,6 +11,8 @@ import type {
   Member, Memory, Persona, Profile, SchemaItem, SchemaPayload, SchemaSection, SettingsPayload,
   SkillItem, SkillPolicy, SkillsPayload, StateSnapshot, Sticker, StickerQuota, ToolItem, ToolPolicy,
   ToolsPayload, MemoryHit, PromptPreview, PromptSection,
+  LlmCatalog, LlmModel, ModelSlot, ModelSlotsPayload, TtsField, TtsFieldType, TtsKind, TtsOptionItem,
+  TtsProvider, TtsProviderList, TtsTestResult,
 } from './types';
 import { setPath } from '../lib/objects';
 
@@ -189,6 +191,7 @@ function normSchemaItem(raw: unknown): SchemaItem {
     description: val(r, 'description') === undefined ? undefined : str(val(r, 'description')),
     widget: val(r, 'widget') === undefined ? undefined : str(val(r, 'widget')),
     values: normSchemaValues(val(r, 'values', 'enum')),
+    optionsFrom: val(r, 'optionsFrom', 'options_from') === undefined ? undefined : str(val(r, 'optionsFrom', 'options_from')),
     min: val(r, 'min') === undefined ? undefined : num(val(r, 'min')),
     max: val(r, 'max') === undefined ? undefined : num(val(r, 'max')),
     step: val(r, 'step') === undefined ? undefined : num(val(r, 'step')),
@@ -429,5 +432,175 @@ export function normAudit(raw: unknown): AuditEntry {
     botId: val(r, 'botId', 'bot_id') === undefined || val(r, 'botId', 'bot_id') === null ? null : str(val(r, 'botId', 'bot_id')),
     kind: str(val(r, 'kind')),
     detail: val(r, 'detail') === undefined || val(r, 'detail') === null ? null : str(val(r, 'detail')),
+  };
+}
+
+// ── 模型中心 ────────────────────────────────────────────────
+
+function ttsOptions(value: unknown): TtsOptionItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => {
+    if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+      const r = rec(item);
+      return { value: str(val(r, 'value')), label: str(val(r, 'label'), str(val(r, 'value'))) };
+    }
+    return { value: String(item), label: String(item) };
+  });
+}
+
+const TTS_FIELD_TYPES = ['text', 'textarea', 'select', 'number', 'json'];
+
+function ttsFieldType(value: unknown): TtsFieldType {
+  const text = str(value);
+  return (TTS_FIELD_TYPES.includes(text) ? text : 'text') as TtsFieldType;
+}
+
+export function normModelSlot(raw: unknown): ModelSlot {
+  const r = rec(raw);
+  const settingsSection = val(r, 'settingsSection', 'settings_section');
+  return {
+    id: str(val(r, 'id')),
+    label: str(val(r, 'label'), str(val(r, 'id'))),
+    status: str(val(r, 'status')) === 'ready' ? 'ready' : 'planned',
+    settingsSection: settingsSection === undefined || settingsSection === null ? undefined : str(settingsSection),
+    desc: val(r, 'desc') === undefined ? undefined : str(val(r, 'desc')),
+    extend: val(r, 'extend') === undefined ? undefined : str(val(r, 'extend')),
+    icon: val(r, 'icon') === undefined ? undefined : str(val(r, 'icon')),
+  };
+}
+
+/** GET /api/models/slots：slots 优先；ready/planned 缺失时由 status 推导。 */
+export function normModelSlots(raw: unknown): ModelSlotsPayload {
+  const r = rec(raw);
+  const slots = list(val(r, 'slots')).map(normModelSlot);
+  const readyRaw = strings(val(r, 'ready'));
+  const plannedRaw = strings(val(r, 'planned'));
+  return {
+    slots,
+    ready: readyRaw.length > 0 ? readyRaw : slots.filter((slot) => slot.status === 'ready').map((slot) => slot.id),
+    planned: plannedRaw.length > 0 ? plannedRaw : slots.filter((slot) => slot.status === 'planned').map((slot) => slot.id),
+  };
+}
+
+/** GET /api/models/llm：宿主目录尽力而为，缺字段按空处理。 */
+export function normLlmCatalog(raw: unknown): LlmCatalog {
+  const r = rec(raw);
+  const catalog: LlmCatalog = {
+    providers: list(val(r, 'providers')).map((item) => {
+      const provider = rec(item);
+      return { id: str(val(provider, 'id')), name: str(val(provider, 'name'), str(val(provider, 'id'))) };
+    }),
+    models: list(val(r, 'models')).map((item) => {
+      const model = rec(item);
+      const parsed: LlmModel = {
+        provider: str(val(model, 'provider')),
+        id: str(val(model, 'id')),
+        name: str(val(model, 'name'), str(val(model, 'id'))),
+      };
+      const description = str(val(model, 'description'));
+      if (description !== '') parsed.description = description;
+      const modalities = val(model, 'inputModalities', 'input_modalities');
+      if (Array.isArray(modalities)) parsed.inputModalities = strings(modalities);
+      return parsed;
+    }),
+  };
+  const warning = str(val(r, 'warning'));
+  if (warning !== '') catalog.warning = warning;
+  return catalog;
+}
+
+function normTtsField(raw: unknown): TtsField {
+  const r = rec(raw);
+  const field: TtsField = {
+    key: str(val(r, 'key')),
+    label: str(val(r, 'label'), str(val(r, 'key'))),
+    type: ttsFieldType(val(r, 'type')),
+  };
+  const options = ttsOptions(val(r, 'options'));
+  if (options.length > 0) field.options = options;
+  const from = str(val(r, 'optionsFrom', 'options_from'));
+  if (from === 'models' || from === 'voices') field.optionsFrom = from;
+  if (val(r, 'required') !== undefined) field.required = bool(val(r, 'required'));
+  if (val(r, 'placeholder') !== undefined) field.placeholder = str(val(r, 'placeholder'));
+  if (val(r, 'help') !== undefined) field.help = str(val(r, 'help'));
+  if (val(r, 'min') !== undefined) field.min = num(val(r, 'min'));
+  if (val(r, 'max') !== undefined) field.max = num(val(r, 'max'));
+  if (val(r, 'step') !== undefined) field.step = num(val(r, 'step'));
+  if (val(r, 'maxLength', 'max_length') !== undefined) field.maxLength = num(val(r, 'maxLength', 'max_length'));
+  return field;
+}
+
+export function normTtsKind(raw: unknown): TtsKind {
+  const r = rec(raw);
+  const format = str(val(r, 'outputFormat', 'output_format')) === 'wav' ? 'wav' : 'mp3';
+  return {
+    id: str(val(r, 'id')),
+    label: str(val(r, 'label'), str(val(r, 'id'))),
+    short: str(val(r, 'short'), str(val(r, 'label'), str(val(r, 'id')))),
+    desc: str(val(r, 'desc')),
+    needsSecret: bool(val(r, 'needsSecret', 'needs_secret')),
+    secretLabel: str(val(r, 'secretLabel', 'secret_label')),
+    secretPlaceholder: str(val(r, 'secretPlaceholder', 'secret_placeholder')),
+    secretHelp: str(val(r, 'secretHelp', 'secret_help')),
+    defaultConfig: parseJson(val(r, 'defaultConfig', 'default_config')),
+    models: ttsOptions(val(r, 'models')),
+    voices: ttsOptions(val(r, 'voices')),
+    fields: list(val(r, 'fields')).map(normTtsField),
+    outputFormat: format,
+    maxCharsPerRequest: num(val(r, 'maxCharsPerRequest', 'max_chars_per_request'), 2000),
+    timeoutMs: num(val(r, 'timeoutMs', 'timeout_ms'), 120000),
+  };
+}
+
+/** GET /api/models/tts/kinds：兼容 {kinds:[...]} 与裸数组。 */
+export function normTtsKinds(raw: unknown): TtsKind[] {
+  if (Array.isArray(raw)) return raw.map(normTtsKind);
+  const r = rec(raw);
+  return list(val(r, 'kinds')).map(normTtsKind);
+}
+
+export function normTtsProvider(raw: unknown): TtsProvider {
+  const r = rec(raw);
+  const kind = str(val(r, 'kind'));
+  return {
+    id: str(val(r, 'id')),
+    name: str(val(r, 'name')),
+    kind,
+    kindLabel: str(val(r, 'kindLabel', 'kind_label'), kind),
+    kindShort: str(val(r, 'kindShort', 'kind_short'), kind),
+    enabled: bool(val(r, 'enabled'), true),
+    config: parseJson(val(r, 'config')),
+    hasSecret: bool(val(r, 'hasSecret', 'has_secret')),
+    summary: str(val(r, 'summary')),
+    outputFormat: str(val(r, 'outputFormat', 'output_format'), 'mp3'),
+    createdAt: num(val(r, 'createdAt', 'created_at')),
+    updatedAt: num(val(r, 'updatedAt', 'updated_at')),
+  };
+}
+
+/** GET /api/models/tts/providers。 */
+export function normTtsProviderList(raw: unknown): TtsProviderList {
+  const r = rec(raw);
+  return {
+    providers: list(val(r, 'providers')).map(normTtsProvider),
+    defaultProvider: str(val(r, 'defaultProvider', 'default_provider')),
+  };
+}
+
+/** POST /api/models/tts/providers/:id/test。 */
+export function normTtsTestResult(raw: unknown): TtsTestResult {
+  const r = rec(raw);
+  return {
+    ok: bool(val(r, 'ok'), true),
+    providerId: str(val(r, 'providerId', 'provider_id')),
+    kind: str(val(r, 'kind')),
+    model: str(val(r, 'model')),
+    voice: str(val(r, 'voice')),
+    format: str(val(r, 'format'), 'mp3'),
+    bytes: num(val(r, 'bytes')),
+    ms: num(val(r, 'ms')),
+    audioBase64: val(r, 'audioBase64', 'audio_base64') === undefined ? undefined : str(val(r, 'audioBase64', 'audio_base64')),
+    mimeType: val(r, 'mimeType', 'mime_type') === undefined ? undefined : str(val(r, 'mimeType', 'mime_type')),
+    tooLarge: val(r, 'tooLarge', 'too_large') === undefined ? undefined : bool(val(r, 'tooLarge', 'too_large')),
   };
 }

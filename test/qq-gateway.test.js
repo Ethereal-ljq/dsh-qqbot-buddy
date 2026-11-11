@@ -273,6 +273,29 @@ test('有凭据：start() 装配中间件链 / 事件处理 / 出站订阅，sto
   const filter = sdk.factoryCalls.find((item) => item.name === 'messageFilter');
   assert.equal(filter.options.dedup.windowMs, 10 * 60 * 1000);
 
+  // quoteRef 必须带 enrichEntry：否则「引用一张卡片追问」时 entry.content 为空，
+  // 模型只会看到 [empty message]（见 .work/QQ-PLATFORM-COMPARISON.md §2）。
+  const quote = sdk.factoryCalls.find((item) => item.name === 'quoteRef');
+  assert.equal(typeof quote.options.enrichEntry, 'function', 'quoteRef 必须注入 enrichEntry 以保留卡片正文');
+
+  // quoteRef 必须用我们自己的 ref store：SDK 走 msg_elements 时会丢作者，
+  // 要靠同一个 store 实例在后续中间件里补回来（否则引用图作者显示「某位群友」）。
+  assert.ok(quote.options.store, 'quoteRef 必须注入自管 store');
+  assert.equal(typeof quote.options.store.get, 'function', 'store 需实现 get');
+  assert.equal(typeof quote.options.store.set, 'function', 'store 需实现 set');
+  // 中间件链里必须有一个 enricher 能读到它：注册的中间件数量应比 SDK 内置多
+  assert.ok(instance.middlewares.length >= 15, '应额外挂上引用作者补全中间件（实际 ' + instance.middlewares.length + '）');
+
+  // enrichEntry 对卡片消息补正文，对普通消息原样返回
+  const cardCtx = { message: { msgType: 3, content: '', raw: { ark_data: { ark_name: '小程序', fields: { title: '测试卡片', source: '哔哩哔哩' } } } } };
+  const enriched = quote.options.enrichEntry({ messageId: 'm1', content: '' }, cardCtx);
+  assert.ok(enriched.content.startsWith('[卡片:小程序]'), '卡片消息应补出卡片正文，实际: ' + enriched.content);
+  const plainEntry = { messageId: 'm2', content: '普通文本' };
+  const plainCtx = { message: { msgType: 0, content: '普通文本' } };
+  assert.deepEqual(quote.options.enrichEntry(plainEntry, plainCtx), plainEntry, '普通消息不应被改写');
+  // 异常输入不能让整条管线挂掉
+  assert.deepEqual(quote.options.enrichEntry(plainEntry, undefined), plainEntry, 'ctx 缺失时应原样返回');
+
   // 事件处理齐全
   for (const event of ['message', 'interaction', 'rawEvent', 'error', 'ready', 'resumed', 'disconnected']) {
     assert.ok((instance.handlers.get(event) || []).length >= 1, '缺少事件处理: ' + event);

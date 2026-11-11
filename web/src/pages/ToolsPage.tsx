@@ -52,6 +52,9 @@ export function ToolsPage() {
   const [skillsDraft, setSkillsDraft] = useState<SkillPolicy | null>(null);
   const [savingTools, setSavingTools] = useState(false);
   const [savingSkills, setSavingSkills] = useState(false);
+  // 手动自愈：重启后 resume 的会话可能丢掉插件工具（实测 36 -> 7），
+  // 这个按钮给一个立即生效的入口，不用等自动自愈的下一轮。
+  const [healingTools, setHealingTools] = useState(false);
 
   const toolsKey = tools.data ? JSON.stringify(tools.data.policy) : '';
   const skillsKey = skills.data ? JSON.stringify(skills.data.policy) : '';
@@ -127,6 +130,36 @@ export function ToolsPage() {
       notify(error.unimplemented ? 'info' : 'error', error.unimplemented ? '工具策略接口尚未装配' : '保存失败：' + error.message, error.code);
     } finally {
       setSavingTools(false);
+    }
+  };
+
+  const healTools = async () => {
+    if (!botId) {
+      notify('info', '请先在「机器人」页创建并启动一个机器人');
+      return;
+    }
+    setHealingTools(true);
+    try {
+      const result = await api.action('heal-tools', { botId });
+      const visible = Array.isArray(result?.tools) ? (result.tools as string[]) : [];
+      const healed = Number(result?.healed ?? 0);
+      const total = Number(result?.total ?? 0);
+      if (total === 0) {
+        notify('info', '当前没有活动会话，无需重挂');
+        return;
+      }
+      const pluginCount = visible.filter((name) => /^(qqbot_|memory_|knowledge_|member_|chat_history_)/.test(name)).length;
+      if (pluginCount === 0) {
+        notify('error', '已重挂 ' + healed + '/' + total + ' 个会话，但没有检测到插件工具：请检查本页的能力开关与白名单');
+      } else {
+        notify('ok', '已重挂 ' + healed + '/' + total + ' 个会话，当前会话可见 ' + visible.length + ' 个工具（插件 ' + pluginCount + ' 个）');
+      }
+      tools.reload();
+    } catch (err) {
+      const error = toApiError(err);
+      notify('error', '重挂失败：' + error.message, error.code);
+    } finally {
+      setHealingTools(false);
     }
   };
 
@@ -416,6 +449,15 @@ export function ToolsPage() {
                 {toolsDraft?.mode === 'deny' ? '清空屏蔽' : '全部放行'}
               </button>
               <button type="button" className="btn btn-sm btn-ghost" disabled={!toolsDraft} onClick={() => bulkTools('clear')}>清空列表</button>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                disabled={healingTools}
+                title="把 qqbot_*/memory_* 等插件工具重新挂到当前会话（修复重启后「这轮没挂工具」）"
+                onClick={() => void healTools()}
+              >
+                {healingTools ? '重挂中…' : '重新挂载工具'}
+              </button>
               <button type="button" className="btn btn-sm btn-primary" disabled={!toolsDirty || savingTools} onClick={() => void saveTools()}>
                 {savingTools ? '保存中…' : toolsDirty ? '保存策略' : '已保存'}
               </button>

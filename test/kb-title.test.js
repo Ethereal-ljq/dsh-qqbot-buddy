@@ -23,7 +23,7 @@ function setup(t) {
 
 test('迁移 v4：kb_chunks 增加 title 列，FTS 重建为多列 (title,text)，三个触发器齐全', (t) => {
   const { db } = setup(t);
-  assert.equal(schemaVersion(db), 4);
+  assert.equal(schemaVersion(db), 6);
   const columns = all(db, 'PRAGMA table_info(kb_chunks)').map((row) => row.name);
   assert.ok(columns.includes('title'), 'kb_chunks 应有 title 列');
   const ddl = get(db, "SELECT sql FROM sqlite_master WHERE name = 'kb_chunks_fts'").sql;
@@ -135,7 +135,7 @@ test('存量 v1 库升级到 v4：回填 title + rebuild 后标题词可检索�
   // 2) openDb 依次升级 v2/v3/v4
   const db = openDb(file);
   t.after(() => closeDb(db));
-  assert.equal(schemaVersion(db), 4);
+  assert.equal(schemaVersion(db), 6);
 
   // 3) title 已从 kb_docs.title 回填，FTS 索引行数 = chunks 行数（rebuild 成功）
   assert.deepEqual(

@@ -13,6 +13,7 @@ import { KnowledgePage } from './pages/KnowledgePage';
 import { LoginPage } from './pages/LoginPage';
 import { MembersPage } from './pages/MembersPage';
 import { MemoryPage } from './pages/MemoryPage';
+import { ModelsPage } from './pages/ModelsPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { PersonasPage } from './pages/PersonasPage';
 import { ProfilesPage } from './pages/ProfilesPage';
@@ -54,6 +55,7 @@ function renderRoute(path: string) {
     case '/overview': return <OverviewPage />;
     case '/bots': return <BotsPage />;
     case '/profiles': return <ProfilesPage />;
+    case '/models': return <ModelsPage />;
     case '/settings': return <SettingsPage />;
     case '/tools': return <ToolsPage />;
     case '/knowledge': return <KnowledgePage />;

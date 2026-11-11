@@ -168,6 +168,7 @@ Web 管理控制台。你不需要额外部署数据库、消息队列或前端�
 | 机器人 | 新建/编辑/启停/重启/重置会话、查看工作目录与状态 |
 | 配置档与绑定 | 配置档策略编辑、默认档切换、作用域绑定（scope → profile） |
 | 设置 | schema 驱动的全量设置，按 global/bot/profile 层保存 |
+| 模型 | 模型中心：LLM / 视觉 / 语音（TTS）/ 更多类型插槽，同一页面 tab 切换（见 §4.5） |
 | 工具与技能 | 宿主发现清单、能力开关、按配置档放行/屏蔽、技能白名单 |
 | 知识库 | 文档入库/删除、FTS/LIKE 检索验证 |
 | 记忆 | 记忆列表/新增/检索/删除、查看提炼结果 |
@@ -291,6 +292,68 @@ scope 写法：
 - 想改**非默认配置档**的策略，请到「配置档与绑定」页选中该配置档编辑（那里显示的是该档的 profile 级设置）；
 - 保存后：回复/人设/模型策略通常下一条消息生效；工具与技能策略需要新会话（见 §5.4）。
 
+### 4.5 模型中心（LLM / 视觉 / 语音 TTS / 更多类型）
+
+控制台左侧「模型」页把**所有模型类配置**收在同一个页面，用 tab 区分类型：
+
+| tab | 配置内容 | 生效范围 |
+| --- | --- | --- |
+| LLM | provider / model / 推理强度 / agent preset | 按配置档（profile 级） |
+| 视觉 | 视觉模型来源：跟随 LLM 自带视觉（当前内联图片）或独立更精细视觉模型 | 按配置档 |
+| 语音（TTS） | 供应商配置面板（全局）+ 当前配置档的供应商/音色/风格/语速/字数选择 | 供应商全局、选择按配置档 |
+| 更多类型 | 预留插槽：图像生成 / 语音识别 / 向量与重排（后续版本接入） | — |
+
+页面顶部有**配置档选择器**（默认当前默认配置档）：LLM / 视觉 / 语音三个 tab 的下半部分编辑的都是
+“这个配置档”的策略，保存只写该配置档的 profile 层；TTS 供应商本身是全局配置，所有配置档共用。
+
+![模型中心 · 语音（TTS）](images/console-models-voice.png)
+
+#### 4.5.1 语音（TTS）三步开始用
+
+1. **加供应商**：「模型 → 语音（TTS）」→ 上方「TTS 供应商」→ 新增，选类型并填参数，保存；
+   有 Key 的供应商 Key 只写不读（保存后只显示“已配置”），编辑时留空表示不修改原 Key。
+2. **配置档选择**：同一 tab 下半部分选「TTS 供应商」（留空 = 跟随全局默认，可在设置页的
+   `voice.defaultProvider` 里指定），按需填音色/风格/语速/单次文字上限，保存。
+3. **开启能力**：打开「启用语音（TTS）」，并在「工具与技能」里把 `tools.capabilities.voice` 打开
+   （语音能力**默认关闭**，避免误触发费用）；改完工具策略后发 `/new` 或重置会话再生效。
+
+之后模型会在合适时机（用户说“用语音说/读出来/唱一句”等）调用 `qqbot_speak`，把文字合成语音发到当前会话；
+语音只适合一两句短句，超过 `voice.maxChars`（默认 300 字）会截断并提示模型，避免长语音和费用。
+
+#### 4.5.2 支持的 TTS 供应商
+
+| 类型 | 需要 Key | 关键配置 | 说明 |
+| --- | --- | --- | --- |
+| 微软 Edge 语音 | 否 | 音色 / 语速 / 音调 / 音量 | 免 Key 的微软音色（晓晓、云希等），内置 WebSocket 实现；协议随微软策略可能变化，失效时可用下面的「本地命令行」调 `edge-tts` CLI 兜底 |
+| 小米 MiMo TTS | 是 | Base URL / 模型 / 音色 / 风格指令 / 克隆样本路径 | `mimo-v2.5-tts`（内置音色）、`-voicedesign`（文字描述设计音色）、`-voiceclone`（mp3/wav 样本克隆，需本机路径 ≤10MB） |
+| 阿里云百炼（Qwen-TTS） | 是 | Base URL / 模型 / 音色 / 语言 | `qwen3-tts-flash` / `qwen-tts`；北京地域默认地址，新加坡用 `dashscope-intl.aliyuncs.com` |
+| OpenAI 兼容 | 是（本地服务可空） | Base URL / 模型 / 音色 / 格式 / 语速 / 风格指令 | 任何兼容 `POST /v1/audio/speech` 的服务（OpenAI、中转、本地 TTS 网关等） |
+| 自定义 HTTP | 可选 | URL / 方法 / 请求头 / 请求体模板 / 响应类型 / JSON 字段路径 | 占位符 `{{text}}` `{{voice}}` `{{style}}` `{{speed}}`；响应支持音频字节、JSON base64、JSON URL 三种 |
+| 本地命令行 | 否 | 命令模板 / 输出格式 / 超时 | 调本机已安装的 TTS CLI（piper / sherpa-onnx / `edge-tts` 等），`{{output}}` 是音频输出路径 |
+
+配置面板里点**试听**会用一句测试文案合成（不经过 QQ），可直接在页面播放并显示耗时/字节数，
+用来确认 Key、音色、网络是否正常。
+
+> 安全提示：自定义 HTTP 与本地命令行属于管理员显式配置的能力（可访问内网/执行本机命令），
+> 只在本机控制台配置，不要把控制台 token 或带 Key 的配置分享给他人。音频最终以 mp3/wav 发送，
+> QQ 语音消息不支持其他格式。
+
+#### 4.5.3 视觉：跟随 LLM 还是独立模型
+
+- **跟随 LLM 自带视觉**（默认）：保持现状——当前消息里的图片直接作为内联图片进对话上下文；
+  模型看不到的可再用 `qqbot_describe_image`。
+- **独立视觉模型（更精细）**：图片不再内联进上下文，改为由 `vision.provider/model` 指定的
+  更精细视觉模型阅读（例如用支持高分辨率/OCR 的模型），适合长截图、表格、几何题等场景。
+- 两种模式下的共同点：**显式调用 `qqbot_describe_image`（看历史图/精读图）时，始终优先使用这里配置的
+  视觉 provider/model**；`mode` 只决定「当前消息图片是否内联」这一行为。
+- `vision.maxTokens` 控制视觉模型输出预算，需要推理的图建议 ≥4096。
+
+#### 4.5.4 更多类型（预留插槽）
+
+「更多类型」tab 展示尚未接入的模型类型（图像生成、语音识别、向量与重排），卡片里写明后续接入点。
+新增模型类型的扩展方式是：在 `lib/core/model-slots.js` 注册 slot + 在设置 schema 里加对应分节，
+控制台会自动多出 tab，不需要改前端。具体契约见 [MODELS-CENTER.md](MODELS-CENTER.md)。
+
 ## 5. 工具与技能
 
 ### 5.1 默认拒绝
@@ -298,7 +361,8 @@ scope 写法：
 v2 的默认姿态是"新东西不会自动进会话"：
 
 - 工具白名单模式 `tools.mode` 默认 `allow`（只允许列表/能力放行的工具）；
-- 能力开关 `tools.capabilities` 默认：workspace/web/memory/stickers/vision **开**，skills/imagegen **关**；
+- 能力开关 `tools.capabilities` 默认：workspace/web/memory/messages/stickers/vision **开**，
+  voice（语音合成）/skills/imagegen/shell **关**；
 - 新装的 dsh 插件带来的工具不会自动出现在 QQ 会话里，需要在工具页放行。
 
 ### 5.2 能力开关与工具发现
@@ -316,7 +380,8 @@ v2 的默认姿态是"新东西不会自动进会话"：
 - deny 模式：先全放行，再剔除 deny 列表与关闭的能力；
 - **deny 永远优先于 allow**；
 - 插件自带工具（qqbot_send_file、qqbot_send_sticker、qqbot_sticker_save、qqbot_send_card、
-  qqbot_quote_reply、qqbot_describe_image 等）也受 deny 与能力开关控制。
+  qqbot_quote_reply、qqbot_describe_image、qqbot_speak 等）也受 deny 与能力开关控制；
+  `qqbot_speak` 需要同时打开能力开关 voice 与配置档的 `voice.enabled` 才会注册/可用。
 
 ### 5.3.1 白名单语义与已知限制
 
@@ -604,7 +669,8 @@ v2 暂未提供口头禅编辑 UI。v1 → v2 迁移时，旧 `phrases` / `promp
 ### 9.4 工具没出现 / 会话里没有工具
 
 1. 看「工具与技能」页的发现清单是否包含它；不含则重启 dsh（或调用 refresh-discovery）刷新发现；
-2. 检查能力开关：workspace/web/memory/stickers/vision 是否打开；skills/imagegen 是否按需打开；
+2. 检查能力开关：workspace/web/memory/messages/stickers/vision 是否打开；voice/skills/imagegen 是否按需打开；
+   语音还要确认配置档里 `voice.enabled` 与「工具与技能」的 voice 能力都打开；
 3. 检查当前配置档的放行/屏蔽列表：allow 模式下未放行的工具不可见；deny 永远优先；
 4. 改完策略需要**新会话**：`/new` 或重启该 bot；
 5. 技能列表为空同理：默认 allow + 空白名单 = 无技能，切「全部可见」或加白名单。
@@ -641,6 +707,22 @@ v2 暂未提供口头禅编辑 UI。v1 → v2 迁移时，旧 `phrases` / `promp
 - 从不同目录启动 dsh 导致 bot 目录变化：固定部署配置 `workspaceRoot`（§2.4）；
 - 改过 `dataDir` 后 token 与数据库都在新位置，旧数据不会自动迁移；
 - 迁移/升级后建议先在控制台核对 bot 列表、配置档与知识库条目再恢复业务。
+
+### 9.10 语音（TTS）排障
+
+- **模型不调用 qqbot_speak**：先看「工具与技能」当前可见性里有没有 `qqbot_speak`：
+  需要 ① 能力开关 `tools.capabilities.voice=true` ② 配置档 `voice.enabled=true`
+  ③ 该配置档 allow/deny 没把它挡住；工具策略改动后要 `/new` 或重置会话。
+- **报“未配置可用的 TTS 供应商”**：到「模型 → 语音（TTS）」新增供应商，或确认已有供应商是启用状态；
+  配置档的 `voice.provider` 留空时会回落到全局 `voice.defaultProvider` / 第一个启用的供应商。
+- **试听失败**：按错误提示定位——Key 无效/额度不足/Base URL 错/网络不通/音色名不存在；
+  百炼和 MiMo 的 Base URL 区分地域；Edge 语音若报 403/握手失败，通常是微软协议变动，
+  可改用「本地命令行」类型调本机 `edge-tts` CLI（`pip install edge-tts`）兜底。
+- **发送语音但 QQ 没声音**：音频必须是 mp3/wav/silk；自定义 HTTP 的「音频格式」要和实际返回一致；
+  发送失败时模型会收到可读错误（含“可能已发出、别重试”的提示），不要让它连续重发。
+- **语音太长/太贵**：调小 `voice.maxChars`（默认 300 字）——超限会截断并提示模型；
+  也可以在人格/提示词里要求“只念短句”。
+- 日志关键词：`TTS`、`qqbot_speak`、`voice`。
 
 ## 10. FAQ
 

@@ -59,9 +59,230 @@ function fakeOneShot(handler = () => ({ ok: true, text: '' })) {
 
 const oneFact = () => ({ ok: true, text: '{"text":"用户喜欢猫","kind":"preference"}' });
 
-function makeCollector({ memory, db, oneShot, logger, ...rest }) {
-  return createMemoryCollector({ memory, db, oneShot: oneShot || fakeOneShot(oneFact), logger: logger || fakeLogger(), ...rest });
+/** 旁路 LLM 必须带 provider/model（否则 llm 服务报 NO_ADAPTER）——测试统一注入。 */
+const TEST_ROUTE = { provider: 'test-provider', model: 'test-model' };
+
+/** 伪 agent：让 resolveRecordRoute 能拿到「最近一次请求的路由」。 */
+function fakeAgentWithRoute() {
+  return {
+    session: {
+      requestHeader: () => ({ config: { ...TEST_ROUTE } }),
+    },
+  };
 }
+
+/**
+ * 测试用 collector 包装：自动补 route / record.agent。
+ * 生产里 route 来自 record.agent.session.requestHeader()（这次对话真实用过的），
+ * 测试里没有真实 agent，这里统一注入，避免 34 处调用点逐条改。
+ */
+function makeCollector({ memory, db, oneShot, logger, ...rest }) {
+  const inner = createMemoryCollector({ memory, db, oneShot: oneShot || fakeOneShot(oneFact), logger: logger || fakeLogger(), ...rest });
+  return {
+    ...inner,
+    maybeCollect: (args = {}) => inner.maybeCollect({ route: TEST_ROUTE, ...args }),
+    collectNow: (args = {}) => inner.collectNow({ route: TEST_ROUTE, ...args }),
+    noteTurnEnd: (record, extra) => {
+      const withAgent = record && typeof record === 'object' && !record.agent
+        ? { ...record, agent: fakeAgentWithRoute() }
+        : record;
+      return inner.noteTurnEnd(withAgent, extra);
+    },
+  };
+}
+
+/* ------------------------------ record.settings 形态兼容（回归） ------------------------------ */
+
+test('record.settings 是函数时也要生效（BotRuntime 的真实形态）', async (t) => {
+  // 回归：以前用 typeof record.settings === 'object' 判断，函数形态被整个丢弃，
+  // 导致 settings.memory.autoExtractEvery 永远读不到、只能吃默认值 10。
+  const { memory, db } = setup(t);
+  const oneShot = fakeOneShot(oneFact);
+  const collector = makeCollector({ memory, db, oneShot });
+  const record = {
+    botId: 'bot-a',
+    peer: 'c2c:user-1',
+    // 关键：函数形态（与 BotRuntime 的 settings: () => self.settingsFor(peer) 一致）
+    settings: () => ({ memory: { enabled: true, autoExtractEvery: 3 } }),
+    turn: { current: { text: '' } },
+  };
+  for (let i = 0; i < 3; i++) {
+    record.turn.current.text = '第' + i + '句';
+    collector.noteTurnEnd(record, { transcript: '用户: 第' + i + '句' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  await collector.whenIdle?.();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  // 阈值 3：3 轮就该触发一次；若是旧 bug（阈值被当成 10），这里会是 0
+  assert.equal(oneShot.calls.length, 1, 'record.settings 为函数时 autoExtractEvery 必须生效');
+});
+
+test('resolveRecordSettings 兼容函数 / 对象 / 抛错 / 缺失四种形态', async () => {
+  const { resolveRecordSettings } = await import('../lib/core/memory/collect.js');
+  const bag = { memory: { enabled: false } };
+  assert.deepEqual(resolveRecordSettings({ settings: () => bag }), bag);
+  assert.deepEqual(resolveRecordSettings({ settings: bag }), bag);
+  assert.equal(resolveRecordSettings({ settings: () => { throw new Error('boom'); } }), undefined);
+  assert.equal(resolveRecordSettings({}), undefined);
+  assert.equal(resolveRecordSettings(null), undefined);
+  // 函数返回非对象时也当没设置
+  assert.equal(resolveRecordSettings({ settings: () => 'nope' }), undefined);
+});
+
+/* ------------------------------ 失败可观测性（P0） ------------------------------ */
+
+test('提炼成功时状态记录 outcome=saved 并清零 failureCount', async (t) => {
+  const { memory, db } = setup(t);
+  const oneShot = fakeOneShot(oneFact);
+  const collector = makeCollector({ memory, db, oneShot });
+  await collector.collectNow({ botId: 'bot-a', peer: 'c2c:u1', transcript: '用户: 我喜欢猫' });
+  const state = collector.getState({ botId: 'bot-a', peer: 'c2c:u1' });
+  assert.equal(state.lastOutcome, 'saved');
+  assert.equal(state.lastSaved, 1);
+  assert.equal(state.failureCount, 0);
+});
+
+test('模型失败时状态记录 outcome=llm-error 并累加 failureCount', async (t) => {
+  const { memory, db } = setup(t);
+  const oneShot = fakeOneShot(() => ({ ok: false, error: '模型炸了' }));
+  const collector = makeCollector({ memory, db, oneShot });
+  await collector.collectNow({ botId: 'bot-a', peer: 'c2c:u2', transcript: '用户: 随便说点' });
+  const state = collector.getState({ botId: 'bot-a', peer: 'c2c:u2' });
+  assert.equal(state.lastOutcome, 'llm-error');
+  assert.match(state.lastReason, /模型炸了/);
+  assert.equal(state.failureCount, 1);
+});
+
+test('解析为空时状态记录 outcome=parse-empty（能区分「跑了没产出」）', async (t) => {
+  const { memory, db } = setup(t);
+  const oneShot = fakeOneShot(() => ({ ok: true, text: '这句不是 JSON' }));
+  const collector = makeCollector({ memory, db, oneShot });
+  await collector.collectNow({ botId: 'bot-a', peer: 'c2c:u3', transcript: '用户: 随便说点' });
+  const state = collector.getState({ botId: 'bot-a', peer: 'c2c:u3' });
+  assert.equal(state.lastOutcome, 'parse-empty');
+  assert.equal(state.lastFacts, 0);
+});
+
+test('转录为空时写状态并产生 warn 日志（以前完全静默）', async (t) => {
+  const { memory, db, log } = setup(t);
+  // 必须显式注入 logger：makeCollector 默认会自己造一个 fakeLogger，拿不到这里的 log
+  const collector = createMemoryCollector({ memory, db, oneShot: fakeOneShot(oneFact), logger: log });
+  await collector.collectNow({ botId: 'bot-a', peer: 'c2c:u4', transcript: '   ' });
+  const state = collector.getState({ botId: 'bot-a', peer: 'c2c:u4' });
+  assert.equal(state.lastOutcome, 'empty-transcript');
+  assert.ok(log.warns.some((line) => line.includes('转录为空')), '空转录必须留下日志，实际: ' + JSON.stringify(log.warns));
+});
+
+test('全部命中近似去重时状态记录 outcome=all-deduped', async (t) => {
+  const { memory, db } = setup(t);
+  const oneShot = fakeOneShot(() => ({ ok: true, text: '{"text":"用户喜欢猫","kind":"preference"}' }));
+  const collector = makeCollector({ memory, db, oneShot });
+  await collector.collectNow({ botId: 'bot-a', peer: 'c2c:u5', transcript: '用户: 我喜欢猫' });
+  await collector.collectNow({ botId: 'bot-a', peer: 'c2c:u5', transcript: '用户: 我喜欢猫' });
+  const state = collector.getState({ botId: 'bot-a', peer: 'c2c:u5' });
+  assert.equal(state.lastOutcome, 'all-deduped');
+  assert.match(state.lastReason, /命中已有记忆/);
+});
+
+/* ------------------------------ 转录来源：消息流水优先 ------------------------------ */
+
+test('装配 messages store 时，转录从消息库取（跨重启、含助手回复）', async (t) => {
+  const { memory, db } = setup(t);
+  const { createMessagesStore } = await import('../lib/core/messages/store.js');
+  const messages = createMessagesStore({ db });
+  messages.save({ botId: 'bot-a', peer: 'group:db', senderId: 'S1', senderName: '朝咱', role: 'user', content: '这个泡馍店也太会做生意了', messageId: 'd1' });
+  messages.save({ botId: 'bot-a', peer: 'group:db', role: 'assistant', content: '糖蒜两块钱挺气人', messageId: 'd2' });
+
+  const oneShot = fakeOneShot(oneFact);
+  const collector = createMemoryCollector({
+    memory, db, oneShot, messages, logger: fakeLogger(),
+  });
+  await collector.maybeCollect({ botId: 'bot-a', peer: 'group:db', transcript: '这段不该被用', route: TEST_ROUTE, rounds: 10 });
+  const prompt = oneShot.calls[0].prompt;
+  assert.match(prompt, /朝咱: 这个泡馍店/, '应从消息库取用户侧消息');
+  assert.match(prompt, /助手: 糖蒜两块钱挺气人/, '应从消息库取助手侧消息');
+  assert.doesNotMatch(prompt, /这段不该被用/, '有消息库时不该用传入的内存转录');
+});
+
+test('消息库为空时回退到传入的 transcript（不因装配了 store 就丢数据）', async (t) => {
+  const { memory, db } = setup(t);
+  const { createMessagesStore } = await import('../lib/core/messages/store.js');
+  const messages = createMessagesStore({ db });
+  const oneShot = fakeOneShot(oneFact);
+  const collector = createMemoryCollector({ memory, db, oneShot, messages, logger: fakeLogger() });
+  await collector.maybeCollect({ botId: 'bot-a', peer: 'group:empty', transcript: '用户: 内存里的转录', route: TEST_ROUTE, rounds: 10 });
+  assert.match(oneShot.calls[0].prompt, /内存里的转录/);
+});
+
+/* ------------------------------ 模型路由（NO_ADAPTER 回归） ------------------------------ */
+
+test('resolveRecordRoute：从 agent.session.requestHeader 读出这次对话真实用过的路由', async () => {
+  const { resolveRecordRoute } = await import('../lib/core/memory/collect.js');
+  const record = {
+    agent: { session: { requestHeader: () => ({ config: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' } }) } },
+  };
+  assert.deepEqual(resolveRecordRoute(record), { provider: 'opencode-go', model: 'deepseek-v4.1-flash' });
+});
+
+test('resolveRecordRoute：拿不到时返回 null（不抛）', async () => {
+  const { resolveRecordRoute } = await import('../lib/core/memory/collect.js');
+  assert.equal(resolveRecordRoute(null), null);
+  assert.equal(resolveRecordRoute({}), null);
+  assert.equal(resolveRecordRoute({ agent: {} }), null);
+  assert.equal(resolveRecordRoute({ agent: { session: {} } }), null);
+  // requestHeader 返回不完整配置
+  assert.equal(resolveRecordRoute({ agent: { session: { requestHeader: () => ({ config: { provider: 'x' } }) } } }), null);
+  // requestHeader 抛错
+  assert.equal(resolveRecordRoute({ agent: { session: { requestHeader: () => { throw new Error('boom'); } } } }), null);
+});
+
+test('normalizeRoute：provider 与 model 必须同时非空', async () => {
+  const { normalizeRoute } = await import('../lib/core/memory/collect.js');
+  assert.deepEqual(normalizeRoute({ provider: ' p ', model: ' m ' }), { provider: 'p', model: 'm' });
+  assert.equal(normalizeRoute({ provider: 'p' }), null);
+  assert.equal(normalizeRoute({ model: 'm' }), null);
+  assert.equal(normalizeRoute({ provider: '', model: 'm' }), null);
+  assert.equal(normalizeRoute(null), null);
+});
+
+test('oneShot 必须收到 provider/model（否则线上报 no adapter registered）', async (t) => {
+  const { memory, db } = setup(t);
+  const oneShot = fakeOneShot(oneFact);
+  const collector = makeCollector({ memory, db, oneShot });
+  await collector.collectNow({ botId: 'bot-a', peer: 'c2c:u1', transcript: '用户: 我喜欢猫' });
+  assert.equal(oneShot.calls.length, 1);
+  assert.equal(oneShot.calls[0].provider, TEST_ROUTE.provider, 'provider 必须透传给 oneShot');
+  assert.equal(oneShot.calls[0].model, TEST_ROUTE.model, 'model 必须透传给 oneShot');
+});
+
+test('完全没有路由时不发请求，记 no-route 并给出可操作提示', async (t) => {
+  const { memory, db, log } = setup(t);
+  const oneShot = fakeOneShot(oneFact);
+  // 绕过包装器，直接测「既没 route 又没 settings.model」的情况
+  const inner = createMemoryCollector({ memory, db, oneShot, logger: log });
+  const result = await inner.collectNow({ botId: 'bot-a', peer: 'c2c:u9', transcript: '用户: 随便' });
+  assert.equal(result.reason, 'no-route');
+  assert.equal(oneShot.calls.length, 0, '没有路由时不该发请求（避免必然失败的 NO_ADAPTER）');
+  const state = inner.getState({ botId: 'bot-a', peer: 'c2c:u9' });
+  assert.equal(state.lastOutcome, 'no-route');
+  assert.match(state.lastReason, /provider/);
+  assert.ok(log.warns.some((w) => w.includes('未配置模型路由')));
+});
+
+test('没有 live agent 时回落到设置里的 model.provider/model.model', async (t) => {
+  const { memory, db } = setup(t);
+  const oneShot = fakeOneShot(oneFact);
+  const inner = createMemoryCollector({ memory, db, oneShot, logger: fakeLogger() });
+  const result = await inner.collectNow({
+    botId: 'bot-a',
+    peer: 'c2c:u-settings',
+    transcript: '用户: 我喜欢猫',
+    settings: { model: { provider: 'from-settings', model: 'model-x' } },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(oneShot.calls[0].provider, 'from-settings');
+  assert.equal(oneShot.calls[0].model, 'model-x');
+});
 
 /* ------------------------------ 触发规则 ------------------------------ */
 

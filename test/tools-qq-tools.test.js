@@ -277,6 +277,47 @@ test('qqbot_describe_image：走 runtime.oneShot.generate({images})，带 attach
   }
 });
 
+test('qqbot_describe_image：settings.vision 的 provider/model/maxTokens 优先于部署 config（每次 execute 现读）', async () => {
+  const ws = makeWorkspace();
+  try {
+    const imagePath = join(ws.root, 'cfg.png');
+    writeFileSync(imagePath, PNG);
+    const generateCalls = [];
+    const runtime = {
+      oneShot: {
+        async generate(args) { generateCalls.push(args); return { ok: true, text: 'ok' }; },
+      },
+    };
+    const ctx = {
+      get: () => ({
+        async saveImage(input) { return { attachmentId: 'sha256:cfg', mediaType: input.mediaType, bytes: input.data.length }; },
+      }),
+    };
+    let settings = { vision: { provider: 'profile-p', model: 'profile-m', maxTokens: 8192 } };
+    const [def] = createVisionTools({
+      ctx,
+      runtime,
+      config: { vision: { provider: 'deploy-p', model: 'deploy-m' } },
+      getSettings: () => settings,
+      logger: silentLogger,
+    });
+    const value = await def.execute({ image: imagePath, prompt: '描述一下' }, {});
+    assert.equal(generateCalls[0].provider, 'profile-p');
+    assert.equal(generateCalls[0].model, 'profile-m');
+    assert.equal(generateCalls[0].maxTokens, 8192);
+    assert.equal(value.model, 'profile-m');
+
+    // 配置档清空 -> 回落到部署 config.vision（热更新：同一工具定义立即生效）
+    settings = { vision: {} };
+    await def.execute({ image: imagePath, prompt: '换个问法' }, {});
+    assert.equal(generateCalls[1].provider, 'deploy-p');
+    assert.equal(generateCalls[1].model, 'deploy-m');
+    assert.equal(generateCalls[1].maxTokens, 4096, '未配置时默认 4096');
+  } finally {
+    ws.cleanup();
+  }
+});
+
 test('qqbot_describe_image：oneShot/attachments 不可用时降级不注册', () => {
   assert.deepEqual(createVisionTools({ ctx: { get: () => undefined }, runtime: { oneShot: null }, config: {}, logger: silentLogger }), []);
   const runtime = { oneShot: { async generate() { return { ok: true, text: 'x' }; } } };

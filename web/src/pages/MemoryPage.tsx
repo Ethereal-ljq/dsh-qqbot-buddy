@@ -10,6 +10,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { api, toApiError, type ApiError } from '../api/client';
 import type { Memory, MemoryHit } from '../api/types';
 import { ActionError } from '../components/ActionError';
+import { CollectHealthPanel } from '../components/CollectHealthPanel';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { DataTable, type Column } from '../components/DataTable';
 import { Drawer } from '../components/Drawer';
@@ -53,6 +54,8 @@ export function MemoryPage() {
   const { botId, bots, bot, notify } = useApp();
   const memories = useApi((signal) => (botId ? api.listMemories(botId, {}, signal) : Promise.resolve([])), [botId]);
   const [filter, setFilter] = useState('');
+  // 手动提炼会写 job_state，完成后让「提炼健康度」面板重取一次
+  const [healthKey, setHealthKey] = useState(0);
 
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<MemoryHit[] | null>(null);
@@ -184,6 +187,8 @@ export function MemoryPage() {
       notify(error.unimplemented ? 'info' : 'error', '提炼失败：' + feedback.message, feedback.detail);
     } finally {
       setExtracting(false);
+      // 不论成功/失败（empty-transcript、busy、llm-error 也会落 job_state），都刷新健康度
+      setHealthKey((value) => value + 1);
     }
   };
 
@@ -291,6 +296,8 @@ export function MemoryPage() {
           </div>
         )}
       />
+
+      <CollectHealthPanel botId={botId} refreshKey={healthKey} />
 
       <section className="panel">
         <header className="panel-head">

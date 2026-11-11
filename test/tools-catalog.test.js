@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import {
   CAPABILITY_TOOLS,
+  CAPABILITY_BOUNDARIES,
   DEFAULT_CAPABILITIES,
   PLUGIN_TOOL_CAPABILITIES,
   PLUGIN_TOOL_NAMES,
@@ -26,6 +27,7 @@ test('能力 key 与主配置 schema 的 tools.capabilities 文档一致', () =>
   assert.ok(item, 'schema 应有 tools.capabilities');
   assert.equal(item.type, 'json');
   assert.deepEqual(Object.keys(CAPABILITY_TOOLS).sort(), Object.keys(DEFAULT_CAPABILITIES).sort(), '映射与默认值必须覆盖同一集合');
+  assert.deepEqual(CAPABILITY_TOOLS.voice, [], 'voice 没有宿主全局工具（只有插件工具 qqbot_speak）');
   // schema 的 help 里列出了可用能力 id：catalog 必须全部覆盖，避免控制台显示的能力没有实现
   for (const capability of Object.keys(CAPABILITY_TOOLS)) {
     assert.ok(String(item.help).includes('"' + capability + '"'), 'schema help 缺少能力描述: ' + capability);
@@ -40,8 +42,22 @@ test('插件工具能力归属齐全（发送/表情/看图）', () => {
   assert.equal(PLUGIN_TOOL_CAPABILITIES.qqbot_sticker_save, 'stickers');
   assert.equal(PLUGIN_TOOL_CAPABILITIES.qqbot_send_sticker, 'stickers');
   assert.equal(PLUGIN_TOOL_CAPABILITIES.qqbot_describe_image, 'vision');
+  assert.equal(PLUGIN_TOOL_CAPABILITIES.qqbot_speak, 'voice');
   assert.equal(PLUGIN_TOOL_CAPABILITIES.qqbot_send_card, null, '卡片工具与能力开关无关');
   assert.equal(PLUGIN_TOOL_CAPABILITIES.qqbot_quote_reply, null);
+});
+
+test('语音能力：默认关闭、qqbot_speak 归属 voice、边界文案存在', () => {
+  assert.equal(DEFAULT_CAPABILITIES.voice, false, '语音合成默认关闭（会产生费用/文件落盘）');
+  assert.equal(resolveCapabilities({}).voice, false);
+  assert.equal(PLUGIN_TOOL_CAPABILITIES.qqbot_speak, 'voice');
+  assert.equal(isPluginToolEnabled({ settings: {}, name: 'qqbot_speak' }), false, '默认不注册 qqbot_speak');
+  assert.equal(
+    isPluginToolEnabled({ settings: { tools: { capabilities: { voice: true } } }, name: 'qqbot_speak' }),
+    true,
+    '显式开启 voice 能力后应注册',
+  );
+  assert.ok(String(CAPABILITY_BOUNDARIES.voice || '').includes('qqbot_speak'), '能力边界应提示 qqbot_speak 的用法');
 });
 
 test('resolveCapabilities：默认值 + 局部覆盖，非法值忽略', () => {
@@ -69,6 +85,8 @@ test('isPluginToolEnabled：allow 非空时只放行列表内；空 allow 回退
     [
       'qqbot_describe_image', 'qqbot_quote_reply',
       'knowledge_read', 'knowledge_save', 'knowledge_search', 'member_lookup', 'member_note',
+      // messages 能力默认开 -> 历史检索工具注册
+      'chat_history_search', 'chat_history_recent',
     ].sort(),
     '空 allow 回退能力开关：memory 能力关闭 -> memory_* 跳过；knowledge/member 无独立能力开关 -> 保留',
   );

@@ -34,6 +34,8 @@ test('静态托管：index/资源/SPA fallback/缓存与 CSP 头', async (t) => 
   assert.match(String(root.headers.get('content-type')), /text\/html/);
   assert.match(root.text, /CONSOLE_INDEX/);
   assert.match(String(root.headers.get('content-security-policy')), /default-src 'self'/);
+  // 语音试听用 data: 音频：media-src 必须显式放开，否则回落 default-src 被拦（P1 回归）
+  assert.match(String(root.headers.get('content-security-policy')), /media-src 'self' data: blob:/);
   assert.equal(root.headers.get('cache-control'), 'no-cache');
   assert.equal(root.headers.get('x-content-type-options'), 'nosniff');
 

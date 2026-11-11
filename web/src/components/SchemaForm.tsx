@@ -8,12 +8,150 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { api, toApiError } from '../api/client';
 import type { SchemaItem, SchemaPayload } from '../api/types';
 import { getPath } from '../lib/objects';
 import { prettyJson } from '../lib/format';
 import { Field } from './Field';
 
 type Widget = 'switch' | 'radio' | 'select' | 'number' | 'text' | 'textarea' | 'tags' | 'json';
+
+// ── optionsFrom 动态候选 ─────────────────────────────────────
+// 设置项只声明候选来源（llmProviders/llmModels/ttsProviders），具体 list 由这些
+// console API 提供。结果按来源缓存，避免同一页多个字段重复请求；写操作后由页面
+// 调 invalidateSchemaOptions() 失效。
+
+export type SchemaOptionsSource = 'llmProviders' | 'llmModels' | 'ttsProviders';
+
+interface DynamicOption {
+  value: string;
+  label: string;
+}
+
+const dynamicOptionCache = new Map<SchemaOptionsSource, Promise<DynamicOption[]>>();
+
+function isOptionsSource(value?: string): value is SchemaOptionsSource {
+  return value === 'llmProviders' || value === 'llmModels' || value === 'ttsProviders';
+}
+
+async function fetchDynamicOptions(source: SchemaOptionsSource): Promise<DynamicOption[]> {
+  if (source === 'ttsProviders') {
+    const payload = await api.ttsProviders();
+    return payload.providers.map((provider) => ({
+      value: provider.id,
+      label: provider.name + ' · ' + (provider.kindShort || provider.kind) + (provider.enabled ? '' : '（已停用）'),
+    }));
+  }
+  const catalog = await api.llmCatalog();
+  if (source === 'llmProviders') {
+    return catalog.providers.map((provider) => ({
+      value: provider.id,
+      label: provider.name === provider.id ? provider.id : provider.name + ' · ' + provider.id,
+    }));
+  }
+  // 同一 model id 可能出现在多个 provider 下：按 id 去重，避免 <option> key 冲突。
+  const seen = new Set<string>();
+  const options: DynamicOption[] = [];
+  for (const model of catalog.models) {
+    if (model.id === '' || seen.has(model.id)) continue;
+    seen.add(model.id);
+    options.push({
+      value: model.id,
+      label: model.provider + ' / ' + (model.name === model.id ? model.id : model.name),
+    });
+  }
+  return options;
+}
+
+function loadDynamicOptions(source: SchemaOptionsSource): Promise<DynamicOption[]> {
+  const cached = dynamicOptionCache.get(source);
+  if (cached) return cached;
+  const task = fetchDynamicOptions(source);
+  dynamicOptionCache.set(source, task);
+  // 失败不缓存：下次挂载/重试重新请求（当前值仍由选项兜底保留）。
+  task.catch(() => {
+    if (dynamicOptionCache.get(source) === task) dynamicOptionCache.delete(source);
+  });
+  return task;
+}
+
+/** 清空动态候选缓存；供应商 CRUD 等写操作后调用，下一次渲染重新拉取。 */
+export function invalidateSchemaOptions(source?: SchemaOptionsSource): void {
+  if (source === undefined) dynamicOptionCache.clear();
+  else dynamicOptionCache.delete(source);
+}
+
+/** optionsFrom 下拉：异步候选 + 失败时把当前值保留成一个选项。 */
+function DynamicSelect({ id, item, value, onChange, disabled, revision }: {
+  id: string;
+  item: SchemaItem;
+  value: unknown;
+  onChange: (next: unknown) => void;
+  disabled?: boolean;
+  revision?: number;
+}) {
+  const source = isOptionsSource(item.optionsFrom) ? item.optionsFrom : null;
+  const [options, setOptions] = useState<DynamicOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!source) return;
+    let alive = true;
+    setLoading(true);
+    setError(null);
+    loadDynamicOptions(source)
+      .then((next) => {
+        if (!alive) return;
+        setOptions(next);
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (!alive) return;
+        setOptions([]);
+        setError(toApiError(err).message);
+        setLoading(false);
+      });
+    return () => { alive = false; };
+  }, [source, attempt, revision]);
+
+  const current = String(value ?? '');
+  const merged = useMemo(() => {
+    const next = [...options];
+    if (current !== '' && !next.some((option) => option.value === current)) {
+      next.unshift({ value: current, label: current + '（当前值）' });
+    }
+    return next;
+  }, [options, current]);
+
+  if (!source) return null;
+
+  return (
+    <div className="dynamic-select">
+      <select
+        id={id}
+        className="input"
+        value={current}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">跟随默认 / 留空</option>
+        {merged.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+      {loading ? <p className="field-help">正在加载候选…</p> : null}
+      {error ? (
+        <p className="field-error">
+          {'候选加载失败：' + error + '；当前值已保留。'}
+          <button type="button" className="link-btn" onClick={() => setAttempt((count) => count + 1)}>重试</button>
+        </p>
+      ) : null}
+      {!loading && !error && merged.length === 0 ? <p className="field-help">暂无候选，可留空跟随默认。</p> : null}
+    </div>
+  );
+}
 
 function optionsOf(item: SchemaItem): Array<{ value: string; label: string }> {
   const raw = item.values ?? [];
@@ -147,14 +285,29 @@ function JsonInput({ id, value, onChange, disabled }: {
   );
 }
 
-function WidgetInput({ item, widget, id, value, onChange, disabled }: {
+function WidgetInput({ item, widget, id, value, onChange, disabled, optionsRevision }: {
   item: SchemaItem;
   widget: Widget;
   id: string;
   value: unknown;
   onChange: (next: unknown) => void;
   disabled?: boolean;
+  optionsRevision?: number;
 }) {
+  // 声明了 optionsFrom 的设置项（provider/model/TTS 供应商）走异步候选下拉。
+  if (isOptionsSource(item.optionsFrom)) {
+    return (
+      <DynamicSelect
+        id={id}
+        item={item}
+        value={value}
+        disabled={disabled}
+        revision={optionsRevision}
+        onChange={onChange}
+      />
+    );
+  }
+
   const options = optionsOf(item);
 
   if (widget === 'switch') {
@@ -264,7 +417,7 @@ function WidgetInput({ item, widget, id, value, onChange, disabled }: {
 }
 
 export function SchemaForm({
-  payload, values, dirty, onChange, scopes, showScope = true, disabled = false, sectionId,
+  payload, values, dirty, onChange, scopes, showScope = true, disabled = false, sectionId, optionsRevision,
 }: {
   payload: SchemaPayload;
   values: Record<string, unknown>;
@@ -275,6 +428,8 @@ export function SchemaForm({
   disabled?: boolean;
   /** 只渲染指定分节（配置档页的 section 子 tab）；不传则渲染全部分节。 */
   sectionId?: string;
+  /** 递增触发 optionsFrom 候选重新拉取（配合 invalidateSchemaOptions 使用）。 */
+  optionsRevision?: number;
 }) {
   const groups = useMemo(() => {
     const sectionMap = new Map(payload.sections.map((section) => [section.id, section]));
@@ -329,6 +484,7 @@ export function SchemaForm({
           id={'schema-' + item.key}
           value={value}
           disabled={disabled}
+          optionsRevision={optionsRevision}
           onChange={(next) => onChange(item.key, next)}
         />
       </Field>
