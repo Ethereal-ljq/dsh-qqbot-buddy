@@ -61,6 +61,18 @@ test('/heal：重挂后没有插件工具时给出可操作提示', async () => 
   assert.match(text, /工具与技能/);
 });
 
+test('/heal：自动新建会话时提示语区分「已新建会话」', async () => {
+  const manager = makeManager({
+    healResult: { ok: true, created: true, tools: ['qqbot_send_file', 'read'] },
+  });
+  const text = await handleCommand({
+    name: 'heal', scope: 'group', peerId: 'g1',
+    settings: { get: () => ({}) }, manager, stats: {},
+  });
+  assert.match(text, /已新建会话并挂载工具/);
+  assert.match(text, /插件工具 1 个/);
+});
+
 test('/heal：后端返回 ok:false 时透出原因', async () => {
   const manager = makeManager({ healResult: { ok: false, reason: '当前会话还没有 agent（先聊一句再试）' } });
   const text = await handleCommand({

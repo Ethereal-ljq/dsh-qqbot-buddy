@@ -75,7 +75,13 @@ test('isPluginToolEnabled：allow 非空时只放行列表内；空 allow 回退
   assert.equal(isPluginToolEnabled({ settings: whitelist, name: 'qqbot_send_file' }), false, '不在白名单 -> 不注册');
   assert.equal(isPluginToolEnabled({ settings: whitelist, name: 'qqbot_send_card' }), false, 'deny 永远优先');
   assert.equal(isPluginToolEnabled({ settings: whitelist, name: 'qqbot_describe_image' }), false, '白名单外的工具即使能力开启也隐藏');
-  assert.deepEqual(enabledPluginTools(whitelist), ['qqbot_sticker_save'], '白名单非空时插件工具也只留列表内');
+  // 兼容别名与正名共享权限：白名单只写正名时，别名也可用（qqbot_save_emote → qqbot_sticker_save）
+  assert.equal(isPluginToolEnabled({ settings: whitelist, name: 'qqbot_save_emote' }), true, '白名单命中正名时别名同样放行');
+  assert.deepEqual(
+    enabledPluginTools(whitelist).sort(),
+    ['qqbot_sticker_save', 'qqbot_save_emote'].sort(),
+    '白名单非空时插件工具只留列表内（含共享权限的别名）',
+  );
 
   const capabilityOnly = { tools: { capabilities: { stickers: false, vision: true, memory: false }, deny: ['qqbot_send_card'] } };
   assert.equal(isPluginToolEnabled({ settings: capabilityOnly, name: 'qqbot_sticker_save' }), false);

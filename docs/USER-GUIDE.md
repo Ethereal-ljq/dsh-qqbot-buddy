@@ -382,6 +382,10 @@ v2 的默认姿态是"新东西不会自动进会话"：
 - 插件自带工具（qqbot_send_file、qqbot_send_sticker、qqbot_sticker_save、qqbot_send_card、
   qqbot_quote_reply、qqbot_describe_image、qqbot_speak 等）也受 deny 与能力开关控制；
   `qqbot_speak` 需要同时打开能力开关 voice 与配置档的 `voice.enabled` 才会注册/可用。
+- 几个「按兄弟工具命名习惯容易猜错」的名字注册了**兼容别名**，调用会转发到同一实现：
+  `qqbot_send_voice`→`qqbot_speak`、`qqbot_send_image`→`qqbot_send_file`、
+  `qqbot_send_emote`→`qqbot_send_sticker`、`qqbot_save_emote`→`qqbot_sticker_save`；
+  能力开关/allow/deny 对别名同样生效，文档与提示词仍推荐正名。
 
 ### 5.3.1 白名单语义与已知限制
 
@@ -674,6 +678,18 @@ v2 暂未提供口头禅编辑 UI。v1 → v2 迁移时，旧 `phrases` / `promp
 3. 检查当前配置档的放行/屏蔽列表：allow 模式下未放行的工具不可见；deny 永远优先；
 4. 改完策略需要**新会话**：`/new` 或重启该 bot；
 5. 技能列表为空同理：默认 allow + 空白名单 = 无技能，切「全部可见」或加白名单。
+
+### 9.4.1 模型说「未知工具」/ 像在臆造工具
+
+- 先看「工具与技能 → 当前可见性」或群里发 `/tools`：工具清单是唯一权威，模型只能调用清单里的名字；
+- 语音工具正名是 **`qqbot_speak`**（模型常猜成 `qqbot_send_voice`，现已注册为兼容别名，
+  调用会转发到同一实现，不会再报 unknown tool）；
+- 如果清单里只有很少几个工具（例如只剩图片生成类），说明会话 resume 时插件工具没挂上：
+  发 **`/heal`**（或控制台「机器人 → 重置会话」）强制重挂；本版已在日志里输出明确告警，
+  并保留每轮自动补挂；
+- 工具调用失败（unknown tool、超时、参数错误）时，提示词已要求模型**如实告知失败原因**，
+  不允许假装成功；若仍出现编造结果，可在人设/追加提示里重申「工具报错必须如实说」，
+  并检查该配置档是否放行了对应工具。
 
 ### 9.5 搜不到知识 / 回复不带知识
 

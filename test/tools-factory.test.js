@@ -196,6 +196,10 @@ test('语音能力：默认关不注册 qqbot_speak；开启 voice 且 tts 已�
   assert.ok(names.includes('qqbot_speak'), '开启 voice 后应注册 qqbot_speak');
   const speak = rig2.botCtx.definitions.find((item) => item.name === 'qqbot_speak');
   assert.equal(typeof speak.execute, 'function');
+  // 兼容别名：模型常把语音工具猜成 qqbot_send_voice，注册成同一实现，避免 unknown tool
+  assert.ok(names.includes('qqbot_send_voice'), '开启 voice 后应同时注册兼容别名 qqbot_send_voice');
+  const voiceAlias = rig2.botCtx.definitions.find((item) => item.name === 'qqbot_send_voice');
+  assert.equal(voiceAlias.execute, speak.execute, '别名必须复用 qqbot_speak 的 execute');
 
   // 3) 能力开了但 tts 未装配 -> 依赖缺失降级不注册
   const rig3 = createRig({ runtime: createRuntime({ withTts: false }) });
