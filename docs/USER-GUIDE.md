@@ -46,16 +46,18 @@ Web 管理控制台。你不需要额外部署数据库、消息队列或前端�
 
 **方式 B：从 GitHub 安装（无需 npm 账号）**
 
-    npx -y github:Ethereal-ljq/dsh-qqbot-buddy#v2
+    npx -y github:Ethereal-ljq/dsh-qqbot-buddy
+
+仓库默认分支即 `v2`，写全 `github:Ethereal-ljq/dsh-qqbot-buddy#v2` 效果相同。
 
 安装器会：把插件装进 dsh profile（默认 `web`）→ 登记到 `dsh.profile.bundles` →
 用 `dsh --profile web --dump-config` 自检插件已进入插件树。安装过程**不构建前端、不联网拉前端依赖**。
 
 常用参数：
 
-    npx -y github:Ethereal-ljq/dsh-qqbot-buddy#v2 --profile tui   # 装到 tui profile
-    npx -y github:Ethereal-ljq/dsh-qqbot-buddy#v2 --dry-run       # 只打印将执行的操作
-    npx -y github:Ethereal-ljq/dsh-qqbot-buddy#v2 --skip-check    # 跳过 dump-config 自检
+    npx -y github:Ethereal-ljq/dsh-qqbot-buddy --profile tui   # 装到 tui profile
+    npx -y github:Ethereal-ljq/dsh-qqbot-buddy --dry-run       # 只打印将执行的操作
+    npx -y github:Ethereal-ljq/dsh-qqbot-buddy --skip-check    # 跳过 dump-config 自检
 
 可用环境变量：`DSH_HOME`（默认 `~/.dsh`）、`DSH_BIN`、`DSH_PROFILE`、`QQBOT_SPEC`。
 

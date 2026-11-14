@@ -12,6 +12,8 @@
 - `package.json` 里的 `publishConfig.tag` 固定为 `next`，所以 `npm publish` **不会**误伤 `latest`；
   发布稳定版时要显式 `npm publish --tag latest`。
 - `engines.dsh` 是兼容契约：改了依赖的宿主能力就同步改这个范围，dsh 会在加载前校验并给出可读的拒绝信息。
+- **分支**：`v2` 是仓库默认分支与唯一开发线；v1 线已归档为 `v1-legacy` 分支 + `v1-archive` 标签（只读）。
+  发布提交与 tag 都推到 `v2`。
 - 版本号只在 `package.json` 里维护；`lib/version.js` 运行时读它，控制台和 `/api/state` 的版本号随之变化。
 
 ## 1. 发布前检查（缺一不可）

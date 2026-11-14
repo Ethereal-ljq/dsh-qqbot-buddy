@@ -93,16 +93,20 @@ npx -y --package=dsh-qqbot-buddy@next dsh-qqbot-buddy-install --profile qqbot --
 
 ### 方式二：从 GitHub 安装（不需要 npm 账号）
 
+仓库的默认分支就是 `v2`，所以下面这些命令拿到的就是最新开发版：
+
 ```bash
-npx -y github:Ethereal-ljq/dsh-qqbot-buddy#v2                       # 装到默认 web profile
-npx -y github:Ethereal-ljq/dsh-qqbot-buddy#v2 --profile qqbot       # 装到指定 profile
-npx -y github:Ethereal-ljq/dsh-qqbot-buddy#v2 --dry-run             # 只看会做什么
+npx -y github:Ethereal-ljq/dsh-qqbot-buddy                     # 装到默认 web profile
+npx -y github:Ethereal-ljq/dsh-qqbot-buddy --profile qqbot     # 装到指定 profile
+npx -y github:Ethereal-ljq/dsh-qqbot-buddy --dry-run           # 只看会做什么
 ```
+
+> 想锁定分支也可以写全 `github:Ethereal-ljq/dsh-qqbot-buddy#v2`。
 
 ### 方式三：源码 / 本地开发安装
 
 ```bash
-git clone -b v2 https://github.com/Ethereal-ljq/dsh-qqbot-buddy.git
+git clone https://github.com/Ethereal-ljq/dsh-qqbot-buddy.git   # 默认分支即 v2
 cd dsh-qqbot-buddy
 
 npm --prefix web ci          # 首次构建前端依赖
@@ -296,6 +300,8 @@ scripts/                安装器、独立安装验收、探针与冒烟脚本
 
 ## 版本与发布
 
+- **分支**：`v2` 是默认分支，也是唯一的开发线（`1.0.0-alpha.x` 都在这里）。
+  v1 线（`v0.21.0` 及之前）已归档为 `v1-legacy` 分支与 `v1-archive` 标签，只读保留，不再更新。
 - **发布通道**：预发布版发到 npm 的 `next` 标签（`package.json` 里 `publishConfig.tag`），稳定版再切 `latest`。
   安装命令一律带 `@next`，避免装到早期的 `latest`。
 - **兼容范围**：`engines.dsh` 声明支持的 dsh 版本，`engines.node` 声明 Node 下限；
