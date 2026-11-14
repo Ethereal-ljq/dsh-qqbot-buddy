@@ -1,0 +1,22 @@
+{
+  "label": "测试 · 插画槽",
+  "description": "单元测试用的最小插画模板：三个槽位、两种氛围、纯 SVG 素材（无第三方版权素材）。",
+  "visuals": {
+    "slots": ["hero", "peek", "rhythm"],
+    "moods": [
+      { "id": "lively", "label": "热闹", "hours": [16, 17, 18, 19, 20, 21] },
+      { "id": "calm", "label": "平静", "hours": [5, 6, 7, 8] }
+    ],
+    "defaultMood": "lively",
+    "items": {
+      "hero-a": { "slot": "hero", "file": "assets/hero-a.svg", "label": "立绘 A" },
+      "hero-b": { "slot": "hero", "file": "assets/hero-b.svg", "label": "立绘 B" },
+      "peek-a": { "slot": "peek", "file": "assets/peek-a.svg", "label": "探头" },
+      "rhythm-a": { "slot": "rhythm", "file": "assets/rhythm-a.svg", "label": "节奏" }
+    },
+    "presets": {
+      "lively": { "hero": "hero-a", "peek": "peek-a", "rhythm": "rhythm-a" },
+      "calm": { "hero": "hero-b", "peek": "peek-a", "rhythm": "rhythm-a" }
+    }
+  }
+}

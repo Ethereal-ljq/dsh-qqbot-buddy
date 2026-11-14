@@ -12,7 +12,7 @@ import {
 } from '../lib/qq/commands.js';
 
 // /heal 会重新挂载会话工具（有副作用），与管理命令同属 adminOnly
-const ADMIN_ONLY = ['heal', 'new', 'reset', 'clear', 'resume', 'stop'];
+const ADMIN_ONLY = ['daily', 'heal', 'new', 'reset', 'clear', 'resume', 'stop'];
 const DEFAULT_STATS = { received: 0, triggered: 0, skipped: 0, replies: 0, lastReplyAt: 0, lastTriggerReason: '' };
 
 function makeSettings(values) {
@@ -85,10 +85,10 @@ async function runCommand({ settings, text, manager, bot, logger, adaptive, mess
 }
 
 // ── 命令目录 ─────────────────────────────────────────────
-test('COMMAND_CATALOG：包含 12 条命令，字段完整，adminOnly 与 DESIGN 一致', () => {
+test('COMMAND_CATALOG：包含 13 条命令，字段完整，adminOnly 与 DESIGN 一致', () => {
   assert.ok(Array.isArray(COMMAND_CATALOG));
   assert.deepEqual(COMMAND_CATALOG.map((item) => item.name),
-    ['help', 'ping', 'status', 'id', 'tools', 'skills', 'heal', 'new', 'reset', 'clear', 'resume', 'stop']);
+    ['help', 'ping', 'status', 'id', 'tools', 'skills', 'daily', 'heal', 'new', 'reset', 'clear', 'resume', 'stop']);
   for (const item of COMMAND_CATALOG) {
     assert.equal(typeof item.name, 'string');
     assert.equal(item.usage, '/' + item.name);
@@ -275,10 +275,10 @@ test('管理员门控：enabled+名单非空时非管理员被拒，且不执行
   const text = bot.sent[0].text;
   assert.ok(text.includes('仅管理员'), '应明确提示仅管理员: ' + text);
   assert.ok(text.includes('u2'), '应给出自己的 openid');
-  // 第四批 UI 后 tab 改名为「命令与权限 → 管理员」；同时兼容旧路径文案
+  // 设置页拆掉后，管理员名单在「配置档 → 命令与权限」分节里
   assert.ok(
-    text.includes('命令与权限 → 管理员') || text.includes('设置 → QQ 机器人 → 管理员'),
-    '应给出配置路径（命令与权限 → 管理员）: ' + text,
+    text.includes('配置档') && text.includes('命令与权限'),
+    '应给出配置路径（配置档 → 命令与权限）: ' + text,
   );
   assert.ok(text.includes('/id'), '应引导用 /id 查看 openid');
 });

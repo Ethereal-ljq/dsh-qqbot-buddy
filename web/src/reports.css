@@ -1,0 +1,175 @@
+/**
+ * reports.css —— 群日报 · 卡片模板页专用样式。
+ *
+ * 只消费 styles.css 的变量（--panel / --surface / --ink* / --line* / --radius …）：
+ * 深浅色自动跟随，页面本身保持仪器面板式的克制 —— 唯一的彩色焦点是 iframe
+ * 里模板渲染出的卡片。类名统一 tpl- 前缀，避免污染全局样式。
+ */
+
+/* ── 布局 / 左栏模板清单 ──────────────────────────────────── */
+/* 加 .master-detail 前缀提高优先级：styles.css 可能在本文件之后加载，
+   保证窄屏单列（<=900px）不被全局的 220px 两列覆盖。 */
+.master-detail.tpl-layout { grid-template-columns: 248px minmax(0, 1fr); }
+
+.tpl-master-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--hairline);
+}
+.tpl-master-skeleton:first-child { border-top: 0; }
+.tpl-master-skeleton-meta { width: 52%; height: 9px; }
+
+.tpl-master-name {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.master-meta.tpl-master-meta { flex-wrap: wrap; row-gap: 3px; }
+.tpl-master-code {
+  font-size: 9.5px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+/* ── 工具条：氛围切换 / 预览操作 ──────────────────────────── */
+.panel-tools-row.tpl-tools { flex-wrap: wrap; row-gap: 8px; }
+.tpl-mood-label { font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
+.tpl-mood-hint { font-size: 10.5px; }
+.tpl-tools .segmented .seg-btn { height: 25px; padding: 0 9px; font-size: 11px; }
+
+/* ── 预览舞台（给卡片裱一个克制的框）──────────────────────── */
+.tpl-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+.tpl-stage-status {
+  padding: 48px 12px;
+  text-align: center;
+  font-size: 11.5px;
+}
+.tpl-stage-error { display: flex; flex-direction: column; gap: 4px; }
+.tpl-error-hint {
+  font-size: 10.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.tpl-stage-busy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--panel);
+  font-size: 9.5px;
+  color: var(--ink-3);
+}
+
+/* ── iframe 预览框（TemplatePreviewFrame）─────────────────── */
+.tpl-frame {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: var(--panel);
+}
+.tpl-frame-inner { position: relative; }
+.tpl-frame-body {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  border: 0;
+  transform-origin: top left;
+}
+
+/* ── 放大预览抽屉 ─────────────────────────────────────────── */
+.tpl-zoom { display: flex; flex-direction: column; gap: 8px; }
+.tpl-zoom-meta { font-size: 10.5px; }
+
+/* ── 页脚信息 ─────────────────────────────────────────────── */
+.panel-foot.tpl-foot { flex-wrap: wrap; gap: 8px 16px; }
+.tpl-foot-meta { font-size: 10.5px; overflow-wrap: anywhere; }
+
+/* ── 新增模板抽屉：目录选择 / 文件清单 ────────────────────── */
+.tpl-file-picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tpl-file-input { display: none; }
+.tpl-file-summary {
+  font-size: 10.5px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.tpl-file-note {
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.tpl-file-note .mono { font-size: 10px; }
+.tpl-file-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 148px;
+  overflow-y: auto;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.tpl-file-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--hairline);
+  font-size: 10.5px;
+  color: var(--ink-2);
+}
+.tpl-file-item:first-child { border-top: 0; }
+.tpl-file-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tpl-html-area { min-height: 152px; }
+
+.tpl-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+.tpl-divider::before,
+.tpl-divider::after { content: ""; height: 1px; flex: 1; background: var(--hairline); }
+
+.tpl-replace { align-items: flex-start; gap: 8px; }
+.tpl-replace .check-box { flex-shrink: 0; margin-top: 1px; }
+.tpl-replace-text { font-size: 11.5px; line-height: 1.5; color: var(--ink-2); }
+.tpl-replace-text .mono { font-size: 10.5px; }
+
+/* ── 响应式：窄屏单列，控件换行 ──────────────────────────── */
+@media (max-width: 900px) {
+  .master-detail.tpl-layout { grid-template-columns: minmax(0, 1fr); }
+  .tpl-stage { margin: 12px; padding: 12px; }
+}
+@media (max-width: 640px) {
+  .tpl-stage { margin: 8px; padding: 8px; }
+  .panel-tools-row.tpl-tools { padding: 8px 10px; }
+  .tpl-mood-hint { display: none; }
+  .panel-foot.tpl-foot { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .tpl-stage-busy { top: 6px; right: 6px; }
+}

@@ -11,6 +11,7 @@ import { routeOf, NAV_GROUPS, type RouteDef } from '../router';
 import { useApp } from '../state/AppContext';
 import { Mark } from './Mark';
 import { StatusDot } from './Status';
+import { ThemeSwitch } from './ThemeSwitch';
 
 const EVENT_LABEL: Record<string, string> = {
   hello: '已连接',
@@ -152,6 +153,7 @@ export function Layout({ path, children }: { path: string; children: ReactNode }
               <StatusDot tone={sse === 'live' ? 'ok' : sse === 'connecting' ? 'warn' : 'danger'} pulse={sse === 'live'} />
               <span className="sse-text">{sse === 'live' ? '实时' : sse === 'connecting' ? '连接中' : '断开'}</span>
             </span>
+            <ThemeSwitch />
             {state?.dshWeb?.url ? (
               <a
                 className="btn btn-ghost btn-sm dsh-web-btn"

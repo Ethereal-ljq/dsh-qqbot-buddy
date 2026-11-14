@@ -38,7 +38,7 @@ export async function createHarness(options = {}) {
     db,
     config,
     events,
-    paths: { dataDir, webDist },
+    paths: { dataDir, webDist, workspaceRoot },
     logger: QUIET_LOGGER,
   };
   // 允许测试用已打开的 db 构造真实服务（如 createKbStore({db})）
@@ -137,6 +137,7 @@ export async function createHarness(options = {}) {
     tokenPath,
     dataDir,
     webDist,
+    workspaceRoot,
     request,
     login,
     loginOk,

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>visuals fixture</title>
+<style>body{margin:0;padding:24px;font-family:sans-serif;background:#fff}</style>
+</head>
+<body>
+<h1 id="title"></h1>
+<img data-slot="peek" src="assets/peek-a.svg" alt="">
+<img data-slot="hero" src="assets/hero-a.svg" alt="">
+<img data-slot="rhythm" src="assets/rhythm-a.svg" alt="">
+<script>
+(function () {
+  var d = window.__CARD_DATA__ || {};
+  document.getElementById('title').textContent = (d.report && d.report.title) || 'fixture';
+})();
+</script>
+</body>
+</html>

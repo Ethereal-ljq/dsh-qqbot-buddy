@@ -13,6 +13,13 @@ import {
   resolveCapabilities,
   isPluginToolEnabled,
   enabledPluginTools,
+  ACTIVATION_GROUPS,
+  TOOL_TIERS,
+  DEFAULT_TOOL_TIER,
+  tierOf,
+  groupOfTool,
+  toolsOfGroup,
+  isClassifiedTier,
 } from '../lib/tools/catalog.js';
 import { CAPABILITY_TOOLS as HOST_CAPABILITY_TOOLS, DEFAULT_CAPABILITIES as HOST_DEFAULTS } from '../lib/host/tools.js';
 import { SETTINGS } from '../lib/core/config/schema.js';
@@ -89,7 +96,7 @@ test('isPluginToolEnabled：allow 非空时只放行列表内；空 allow 回退
   assert.deepEqual(
     enabledPluginTools(capabilityOnly).sort(),
     [
-      'qqbot_describe_image', 'qqbot_quote_reply',
+      'qqbot_describe_image', 'qqbot_quote_reply', 'qqbot_enable',
       'knowledge_read', 'knowledge_save', 'knowledge_search', 'member_lookup', 'member_note',
       // messages 能力默认开 -> 历史检索工具注册
       'chat_history_search', 'chat_history_recent',
@@ -97,3 +104,45 @@ test('isPluginToolEnabled：allow 非空时只放行列表内；空 allow 回退
     '空 allow 回退能力开关：memory 能力关闭 -> memory_* 跳过；knowledge/member 无独立能力开关 -> 保留',
   );
 });
+
+test('工具档位：插件工具全部登记；默认主动集很小，生图/语音/卡片/文件/命令是被动', () => {
+  for (const name of PLUGIN_TOOL_NAMES) {
+    assert.equal(isClassifiedTier(name), true, '插件工具必须在 TOOL_TIERS 登记: ' + name);
+  }
+  assert.equal(tierOf('qqbot_send_file', {}), 'active');
+  assert.equal(tierOf('memory_save', {}), 'active');
+  assert.equal(tierOf('qqbot_enable', {}), 'active', '元工具必须常驻');
+  for (const name of ['generate_image', 'edit_image', 'qqbot_speak', 'qqbot_send_card', 'read', 'bash', 'job_list']) {
+    assert.equal(tierOf(name, {}), 'passive', name + ' 默认被动');
+  }
+  // 别名与正名同档
+  assert.equal(tierOf('qqbot_send_voice', {}), 'passive');
+  assert.equal(tierOf('qqbot_send_image', {}), 'active');
+});
+
+test('工具档位可被 Profile 覆盖（工具名优先于分组）', () => {
+  const byTool = { tools: { tiers: { generate_image: 'active', imagegen: 'active' } } };
+  assert.equal(tierOf('generate_image', byTool), 'active');
+  assert.equal(tierOf('edit_image', byTool), 'active', '分组覆盖对该组其它工具生效');
+  const byGroupOff = { tools: { tiers: { web: 'passive' } } };
+  assert.equal(tierOf('web_search', byGroupOff), 'passive', '分组可以整体降档');
+  const bad = { tools: { tiers: { read: 'loud' } } };
+  assert.equal(tierOf('read', bad), 'passive', '非法覆盖值被忽略，回落内置档位');
+  // 未登记的宿主工具默认按 DEFAULT_TOOL_TIER
+  assert.equal(tierOf('some_mcp_tool', {}), 'active');
+  assert.equal(isClassifiedTier('some_mcp_tool'), false);
+});
+
+test('激活分组：组内工具与触发词自洽', () => {
+  for (const [id, group] of Object.entries(ACTIVATION_GROUPS)) {
+    assert.ok(group.label, id + ' 缺少 label');
+    assert.ok(Array.isArray(group.tools) && group.tools.length > 0, id + ' 缺少 tools');
+    assert.ok(Array.isArray(group.triggers) && group.triggers.length > 0, id + ' 缺少 triggers');
+    for (const tool of group.tools) {
+      assert.equal(groupOfTool(tool), id, tool + ' 的分组归属应为 ' + id);
+    }
+  }
+  assert.equal(groupOfTool('qqbot_send_voice'), 'voice', '别名按正名归属');
+  assert.equal(groupOfTool('qqbot_send_file'), undefined);
+});
+

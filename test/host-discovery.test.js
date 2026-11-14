@@ -22,6 +22,36 @@ function fakeRuntime(settingsForProfile) {
   };
 }
 
+test('刷新发现：返回新增 / 消失的工具（用于控制台「刷新发现」按钮）', async () => {
+  const visible = new Map([['mcp__a__x', { name: 'mcp__a__x', description: 'd' }]]);
+  const ctx = {
+    get: (name) => {
+      if (name === 'tools') return { view: () => ({ visible, knownNames: new Set(visible.keys()), restrictableNames: new Set(visible.keys()) }) };
+      if (name === 'skills') return { list: async () => ({ skills: [] }) };
+      return undefined;
+    },
+  };
+  const discovery = createDiscovery({ ctx, runtime: fakeRuntime(() => ({})) });
+
+  const first = await discovery.refresh();
+  assert.equal(first.ok, true);
+  assert.ok(first.tools > 0);
+  assert.deepEqual(first.added, [], '第一次刷新只建基线，不报全部新增');
+  assert.deepEqual(first.removed, []);
+
+  // 新插件注册了一个工具 → 第二次刷新应报「新增」
+  visible.set('mcp__b__y', { name: 'mcp__b__y', description: 'd' });
+  const second = await discovery.refresh();
+  assert.deepEqual(second.added, ['mcp__b__y']);
+  assert.deepEqual(second.removed, []);
+
+  // 插件被卸载 → 应报「消失」（= 现在失效的工具）
+  visible.delete('mcp__a__x');
+  const third = await discovery.refresh();
+  assert.deepEqual(third.removed, ['mcp__a__x']);
+  assert.deepEqual(third.added, []);
+});
+
 test('发现全集：插件工具 + 能力挂载的宿主工具 + 全局视图', () => {
   const discovery = createDiscovery({ ctx: fakeCtx(['mcp__fs__read']), runtime: fakeRuntime(() => ({})) });
   const items = discovery.list();

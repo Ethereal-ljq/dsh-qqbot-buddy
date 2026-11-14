@@ -143,7 +143,8 @@ test('能力关闭：stickers=false 只跳过发送/表情工具，vision=false 
   const rig = createRig({ runtime: createRuntime({ withStickers: true }) });
   await run(rig, settings);
   const names = rig.botCtx.definitions.map((item) => item.name);
-  assert.deepEqual(names.sort(), ['qqbot_quote_reply', 'qqbot_send_card'].sort());
+  // qqbot_enable 是元工具：force 注册（否则被动工具没有点亮入口），能力关闭不影响它
+  assert.deepEqual(names.sort(), ['qqbot_enable', 'qqbot_quote_reply', 'qqbot_send_card'].sort());
 });
 
 test('deny/allow 列表对插件工具同样生效（deny 优先）', async () => {

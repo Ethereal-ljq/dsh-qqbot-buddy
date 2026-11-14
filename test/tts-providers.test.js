@@ -7,12 +7,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  TTS_KINDS, TTS_KIND_LIST, kindOf, publicKinds, defaultConfigFor,
+  TTS_KINDS, TTS_KIND_LIST, TTS_GROUPS, kindOf, groupOf, publicKinds, defaultConfigFor,
   normalizeProviderInput, providerView, fieldOptions,
 } from '../lib/core/tts/providers.js';
 
-const EXPECTED_KINDS = ['bailian', 'command', 'custom', 'edge', 'mimo', 'openai'];
-const FIELD_TYPES = new Set(['text', 'textarea', 'select', 'number', 'json']);
+const EXPECTED_KINDS = ['bailian', 'command', 'custom', 'deepseek', 'deepseek-asr', 'edge',
+  'faster-whisper', 'mimo', 'mimo-asr', 'mimo-clone', 'mimo-design', 'minimax',
+  'minimax-clone', 'minimax-design', 'openai', 'openai-asr'];
+const FIELD_TYPES = new Set(['text', 'textarea', 'select', 'number', 'json', 'audio']);
 
 test('kind 元数据齐全且自洽', () => {
   assert.deepEqual(Object.keys(TTS_KINDS).sort(), EXPECTED_KINDS);
@@ -23,8 +25,13 @@ test('kind 元数据齐全且自洽', () => {
       assert.equal(typeof meta[key], 'string', meta.id + '.' + key);
     }
     assert.equal(typeof meta.needsSecret, 'boolean');
-    assert.ok(['mp3', 'wav'].includes(meta.outputFormat), meta.id + '.outputFormat');
-    assert.ok(meta.maxCharsPerRequest > 0, meta.id + '.maxCharsPerRequest');
+    if (meta.capability === 'asr') {
+      assert.equal(meta.outputFormat, '', meta.id + '.outputFormat（ASR 不产出音频）');
+      assert.equal(meta.maxCharsPerRequest, 0, meta.id + '.maxCharsPerRequest（ASR 不用）');
+    } else {
+      assert.ok(['mp3', 'wav'].includes(meta.outputFormat), meta.id + '.outputFormat');
+      assert.ok(meta.maxCharsPerRequest > 0, meta.id + '.maxCharsPerRequest');
+    }
     assert.ok(meta.timeoutMs > 0, meta.id + '.timeoutMs');
     assert.ok(Array.isArray(meta.voices), meta.id + '.voices');
     assert.ok(Array.isArray(meta.models), meta.id + '.models');
@@ -44,7 +51,33 @@ test('kind 元数据齐全且自洽', () => {
     for (const key of Object.keys(meta.defaultConfig)) {
       assert.ok(fieldKeys.has(key), meta.id + '.defaultConfig 含未知字段: ' + key);
     }
+    // 每个 kind 必须归属一个已知分组（控制台按分组拆块）
+    assert.ok(TTS_GROUPS.some((group) => group.id === meta.group), meta.id + '.group 非法: ' + meta.group);
+    // MiMo 三类能力不再让用户选模型（模型由 kind 固定）
+    if (meta.id.startsWith('mimo')) {
+      assert.equal(meta.fields.some((field) => field.key === 'model'), false, meta.id + ' 不应再暴露 model 字段');
+    }
+    // 克隆必须用文件选择器（audio 类型）而不是手输路径
+    if (meta.group === 'clone') {
+      const sample = meta.fields.find((field) => field.key === 'samplePath');
+      assert.ok(sample, meta.id + ' 缺少 samplePath 字段');
+      assert.equal(sample.type, 'audio', meta.id + '.samplePath 应为 audio 文件选择器');
+      assert.equal(sample.required, true, meta.id + '.samplePath 必填');
+    }
   }
+});
+
+test('TTS_GROUPS：默认 / 克隆 / 文字设计 / ASR 四组的元数据完备', () => {
+  assert.deepEqual(TTS_GROUPS.map((group) => group.id), ['default', 'clone', 'design', 'asr']);
+  for (const group of TTS_GROUPS) {
+    assert.equal(typeof group.label, 'string');
+    assert.ok(group.label !== '');
+    assert.equal(typeof group.desc, 'string');
+    assert.ok(group.desc !== '');
+  }
+  assert.deepEqual(TTS_GROUPS.reduce((acc, group) => acc.concat(TTS_KIND_LIST.filter((kind) => kind.group === group.id).map((kind) => kind.id)), []).sort(), [...EXPECTED_KINDS].sort());
+  assert.equal(groupOf('clone').id, 'clone');
+  assert.equal(groupOf('nope').id, 'default');
 });
 
 test('kindOf / publicKinds / defaultConfigFor 的边界与深拷贝', () => {
@@ -149,27 +182,102 @@ test('normalizeProviderInput：编辑时保留未提交的 name/config/enabled',
   assert.equal(disabled.value.enabled, false);
 });
 
-test('normalizeProviderInput：mimo voiceclone / voicedesign 的前置校验', () => {
-  assert.throws(
-    () => normalizeProviderInput({ kind: 'mimo', config: { model: 'mimo-v2.5-tts-voiceclone', samplePath: '   ' } }),
-    /克隆样本/,
-  );
-  const clone = normalizeProviderInput({
-    kind: 'mimo',
-    config: { model: 'mimo-v2.5-tts-voiceclone', samplePath: '/tmp/sample.wav' },
-  });
+test('normalizeProviderInput：克隆 / 文字设计拆成独立 kind 的前置校验', () => {
+  // 克隆：必须选样本音频（绝对路径）
+  assert.throws(() => normalizeProviderInput({ kind: 'mimo-clone', config: { samplePath: '   ' } }), /samplePath|克隆样本/);
+  assert.throws(() => normalizeProviderInput({ kind: 'mimo-clone', config: { samplePath: 'relative/a.mp3' } }), /绝对路径/);
+  const clone = normalizeProviderInput({ kind: 'mimo-clone', config: { samplePath: '/tmp/sample.wav' } });
+  assert.equal(clone.value.kind, 'mimo-clone');
   assert.equal(clone.value.config.samplePath, '/tmp/sample.wav');
-  assert.equal(clone.value.config.voice, 'mimo_default', '其余默认配置仍应填充');
+  assert.equal(clone.value.config.baseUrl, 'https://api.xiaomimimo.com/v1');
+  assert.equal(clone.value.config.voice, undefined, '克隆不再有内置音色字段');
 
+  // 文字设计：必须填音色描述
+  assert.throws(() => normalizeProviderInput({ kind: 'mimo-design', config: {} }), /description|音色描述/);
+  const design = normalizeProviderInput({ kind: 'mimo-design', config: { description: '温柔、稍快的女声' } });
+  assert.equal(design.value.kind, 'mimo-design');
+  assert.equal(design.value.config.description, '温柔、稍快的女声');
+  assert.equal(design.value.config.style, undefined, '文字设计不再复用 style 字段');
+
+  // 旧表单把 model 塞给 mimo 时给出可读提示（而不是静默丢弃）
   assert.throws(
-    () => normalizeProviderInput({ kind: 'mimo', config: { model: 'mimo-v2.5-tts-voicedesign', style: '  ' } }),
-    /描述想要的声音/,
+    () => normalizeProviderInput({ kind: 'mimo', config: { model: 'mimo-v2.5-tts-voiceclone', samplePath: '/tmp/a.mp3' } }),
+    /已拆成独立类型/,
   );
-  const design = normalizeProviderInput({
-    kind: 'mimo',
-    config: { model: 'mimo-v2.5-tts-voicedesign', style: '温柔、稍快的女声' },
+});
+
+test('normalizeProviderInput：MiniMax 三类（默认 / 克隆 / 设计）校验', () => {
+  // 默认：填充音色/模型/参数默认值
+  const basic = normalizeProviderInput({ kind: 'minimax' });
+  assert.equal(basic.value.config.baseUrl, 'https://api.minimax.cn');
+  assert.equal(basic.value.config.model, 'speech-2.8-hd');
+  assert.equal(basic.value.config.voice, 'female-shaonv');
+  assert.equal(basic.value.config.voiceId, undefined, '默认音色不需要 voiceId');
+
+  // 克隆：必须选样本、只支持 mp3/m4a/wav、绝对路径
+  assert.throws(() => normalizeProviderInput({ kind: 'minimax-clone' }), /samplePath|克隆样本/);
+  assert.throws(
+    () => normalizeProviderInput({ kind: 'minimax-clone', config: { samplePath: 'relative/a.mp3' } }),
+    /绝对路径/,
+  );
+  assert.throws(
+    () => normalizeProviderInput({ kind: 'minimax-clone', config: { samplePath: '/tmp/a.flac' } }),
+    /mp3 \/ m4a \/ wav/,
+  );
+  const clone = normalizeProviderInput({ kind: 'minimax-clone', config: { samplePath: '/tmp/a.mp3' } });
+  assert.equal(clone.value.config.samplePath, '/tmp/a.mp3');
+  assert.equal(clone.value.config.voiceId, '');
+
+  // 示例音频必须和文本成对出现
+  assert.throws(
+    () => normalizeProviderInput({ kind: 'minimax-clone', config: { samplePath: '/tmp/a.mp3', promptSamplePath: '/tmp/p.wav' } }),
+    /示例音频文本/,
+  );
+  const withPrompt = normalizeProviderInput({
+    kind: 'minimax-clone',
+    config: { samplePath: '/tmp/a.mp3', promptSamplePath: '/tmp/p.wav', promptText: '这是一段示例文本。' },
   });
-  assert.equal(design.value.config.style, '温柔、稍快的女声');
+  assert.equal(withPrompt.value.config.promptText, '这是一段示例文本。');
+
+  // voice_id 规则
+  assert.throws(
+    () => normalizeProviderInput({ kind: 'minimax-clone', config: { samplePath: '/tmp/a.mp3', voiceId: '1bad' } }),
+    /音色 ID/,
+  );
+  const withVoice = normalizeProviderInput({ kind: 'minimax-clone', config: { samplePath: '/tmp/a.mp3', voiceId: 'qqbotClone01' } });
+  assert.equal(withVoice.value.config.voiceId, 'qqbotClone01');
+
+  // 设计：描述必填；voiceId 规则同样生效
+  assert.throws(() => normalizeProviderInput({ kind: 'minimax-design', config: {} }), /description|音色描述/);
+  assert.throws(
+    () => normalizeProviderInput({ kind: 'minimax-design', config: { description: '低沉男声', voiceId: '-bad' } }),
+    /音色 ID/,
+  );
+  const design = normalizeProviderInput({ kind: 'minimax-design', config: { description: '低沉男声' } });
+  assert.equal(design.value.config.previewText, '你好，这是 MiniMax 音色设计的试听。');
+});
+
+test('providerView：MiniMax 克隆/设计的 voiceId 摘要与分组', () => {
+  const clone = providerView({
+    id: 'tts_mm', name: 'mm', kind: 'minimax-clone', enabled: 1,
+    config: { samplePath: '/home/a/sample.mp3', voiceId: 'qqbotClone01' }, secret: 'k', created_at: 1, updated_at: 1,
+  });
+  assert.equal(clone.group, 'clone');
+  assert.match(clone.summary, /样本 · sample\.mp3/);
+  assert.match(clone.summary, /音色 · qqbotClone01/);
+  const design = providerView({
+    id: 'tts_md', name: 'md', kind: 'minimax-design', enabled: 1,
+    config: { description: '低沉男声', voiceId: 'ttv-voice-01' }, secret: 'k', created_at: 1, updated_at: 1,
+  });
+  assert.equal(design.group, 'design');
+  assert.match(design.summary, /音色 · ttv-voice-01/);
+});
+
+test('normalizeProviderInput：mimo 默认音色仍可用配置档覆盖的音色/风格字段', () => {
+  const { value } = normalizeProviderInput({ kind: 'mimo', config: { voice: '冰糖', style: '活泼一点' } });
+  assert.equal(value.config.voice, '冰糖');
+  assert.equal(value.config.style, '活泼一点');
+  assert.equal(value.config.model, undefined, '默认音色不再接受 model');
 });
 
 test('providerView：脱敏、状态与摘要', () => {
@@ -190,6 +298,8 @@ test('providerView：脱敏、状态与摘要', () => {
   assert.equal(view.kind, 'bailian');
   assert.equal(view.kindLabel, TTS_KINDS.bailian.label);
   assert.equal(view.kindShort, TTS_KINDS.bailian.short);
+  assert.equal(view.group, 'default');
+  assert.equal(view.groupLabel, '默认音色 TTS');
   assert.equal(view.outputFormat, 'wav');
   assert.equal(view.summary, 'qwen3-tts-flash · Cherry');
   assert.equal(view.createdAt, 111);
@@ -213,14 +323,24 @@ test('providerView：脱敏、状态与摘要', () => {
   assert.match(commandView.summary, /^edge-tts --text hi/);
   const customView = providerView({ id: 'tts_u', name: 'u', kind: 'custom', enabled: 1, config: { url: 'https://example.com/tts' }, secret: '', created_at: 1, updated_at: 1 });
   assert.equal(customView.summary, 'https://example.com/tts');
+
+  // 克隆/文字设计的摘要：样本文件名 / 描述前缀；分组也要正确
+  const cloneView = providerView({ id: 'tts_cl', name: 'c', kind: 'mimo-clone', enabled: 1, config: { samplePath: '/home/a/sample.wav' }, secret: 'k', created_at: 1, updated_at: 1 });
+  assert.equal(cloneView.group, 'clone');
+  assert.match(cloneView.summary, /样本 · sample\.wav/);
+  const designView = providerView({ id: 'tts_d', name: 'd', kind: 'mimo-design', enabled: 1, config: { description: '18 岁女生，清亮偏软' }, secret: 'k', created_at: 1, updated_at: 1 });
+  assert.equal(designView.group, 'design');
+  assert.match(designView.summary, /18 岁女生/);
 });
 
 test('fieldOptions：展开 voices/models 与静态 options', () => {
   const edgeVoice = TTS_KINDS.edge.fields.find((field) => field.key === 'voice');
   assert.deepEqual(fieldOptions('edge', edgeVoice), TTS_KINDS.edge.voices);
 
-  const mimoModel = TTS_KINDS.mimo.fields.find((field) => field.key === 'model');
-  assert.deepEqual(fieldOptions('mimo', mimoModel), TTS_KINDS.mimo.models);
+  const mimoVoice = TTS_KINDS.mimo.fields.find((field) => field.key === 'voice');
+  assert.deepEqual(fieldOptions('mimo', mimoVoice), TTS_KINDS.mimo.voices);
+  const cloneSample = TTS_KINDS['mimo-clone'].fields.find((field) => field.key === 'samplePath');
+  assert.equal(cloneSample.type, 'audio');
 
   const customMethod = TTS_KINDS.custom.fields.find((field) => field.key === 'method');
   assert.deepEqual(fieldOptions('custom', customMethod), [

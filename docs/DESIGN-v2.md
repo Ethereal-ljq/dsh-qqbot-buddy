@@ -20,7 +20,8 @@ v1 的 8 个分页 + 26 个页面组件塞在宿主设置页里，代价是：�
 ### 0.2 配置管理：Bot → Profile → Binding 三层
 
 - **Bot**：QQ 应用本体 + 独立工作目录 + 独立数据（记忆/知识库/群友库/表情包/人格卡）。
-- **Profile（配置档）**：只装"可变策略"——人设、提示段、模型/provider、回复与触发策略、工具与技能策略。
+- **Profile（配置档）**：只装"可变策略"——人设、提示段、模型/provider、回复与触发策略、工具与技能策略、
+  管理员命令门控（`admin.*`，随配置档生效）。
   一个 bot 有多个 profile，任意时刻一个 `active`，可一键切换（= 快速切换配置）。
 - **Binding（作用域绑定）**：`scope` 采用 UMO 风格 `qq:group:123456` / `qq:group:*` / `qq:c2c:*` / `*`，
   数值 priority + 匹配精度排序（精确 > 类型通配 > bot 通配 > 默认）。等价于 AstrBot 的 abconf/UMO 路由。
@@ -50,11 +51,40 @@ AstrBot 的配置档只决定该 UMO 用哪套 provider/prompt；**对话上下�
 
 **v2 契约（写死，不许绕）**
 
-- 所有 prompt 贡献都在 **agent scope** 用唯一命名注册：`qqbot:persona`、`qqbot:guide`、
-  `qqbot:memory`、`qqbot:knowledge`、`qqbot:members`……**绝不与宿主段同名**
-  （需要替换宿主语义时显式使用宿主导出的 section 名并写明理由）。
-- 动态内容一律走 `systemPrompt.variable(name, provider)`，section 文本写 `{{qqbot_persona}}` 这类占位——
-  每次 assembly 重新求值，天然解决"配置改了冷会话不生效"。
+- 所有 prompt 贡献都在 **agent scope** 注册，只影响我们创建的 session；宿主全局配置一律不改。
+- **默认不与宿主段同名**；需要替换宿主语义时，**显式占官方槽位**并写明理由（2026-11-12 更新，
+  见下节「槽位化」）：
+  - 人设 → `deployment:persona-prefix`（官方给部署方替换人设的槽位，`dsh-persona` 同款）；
+  - QQ 环境事实 → `deployment:persona-suffix`（排在第一方指导之后，近因最好）；
+  - 其余自有段（工具指引/记忆/知识/群友）继续用 `qqbot:*`，不抢宿主名字。
+- **遮蔽清单**（agent scope 注册同名空文本，渲染期丢空段；遮蔽不存在的名字只多一个空段，无副作用）：
+  `harness:identity`、`context:file-reference`、`ui:deliverable-file-references`、`harness:source`、
+  `app:web-surface`，以及**被动工具**的 `tool:*` 散文段（工具档位见下条）。
+- **工具两档**（`lib/tools/catalog.js` 唯一真相）：
+  - `active` 常驻声明；
+  - `passive` 默认不声明：插件工具用 `tools.register(def, { when })`（按 step 求值），
+    宿主全局工具用 `tools.restrict({ allow })` **按轮重放**（集合不变则复用，避免 tools/change 抖动）。
+  激活来源：`lib/tools/activation.js` 的确定性路由（只吃本轮用户原话）+ 元工具 `qqbot_enable`。
+- **装配期决定声明面（2026-11-14 渐进披露）**：
+  - 常驻工具集由 **agent preset** 决定（`lib/host/presets.js` 按能力组合运行时注册
+    `qqbot-buddy-<key>`，只装配"有 active 档工具"的宿主插件；session 记录 preset id，
+    重启按同一 id 恢复）——一个 agent 生命周期内声明面不变 → 提示词前缀稳定（缓存命中）、
+    模型记忆与声明一致（不再出现"刚用过就消失"的幻影工具）；
+  - 未装载的能力以**静态索引**写进工具指引（只有名字/组 id，没有 schema，见
+    `lib/tools/index-guide.js`）；模型用 `qqbot_enable` 装载，工具结果回**用法卡**（一行签名）
+    让下一步一次调对；
+  - 激活改为**会话级粘滞**（`addActivation`，只增不减；`/new` 或会话释放才清空），
+    只有本轮用户原话命中的组会被追加，绝不回收；
+  - preset 注册/挂载失败一律回落原来的动态挂载（`mountFeatureTools`），功能不退化。
+- **静态进 section、动态进 context（2026-11-14 缓存改造）**：
+  - 系统提示词只放静态内容（人设/工具指引/环境后缀）；同一配置档下每轮渲染必须逐字节相同；
+  - 记忆/知识/群友/时间走 `systemPrompt.context({name, order, text, required: true})`：宿主把它们物化成
+    **user-role 运行时上下文快照**追加在会话末尾，只追加"变了的那条"，不重写前缀；
+  - `required: true` 必须有——`persona.suppressRuntimeContext` 打开时只保留 required 上下文，
+    否则记忆/群友会被一起吞掉；
+  - 实测依据：动态段留在 system 里时 38% 的 step 冷启动、平均 47k input tokens；前缀稳定时 723 步 0 次全失效。
+- **段顺序**：人设 0 → 工具指引 5100 → 环境后缀 10200（全是静态段）；
+  运行时上下文顺序 记忆 300 → 知识 310 → 群友 320 → 时间 340（排在宿主 context 100~210 之后）。
 - **禁止**监听 `system-prompt/assemble` 改写数组；禁止改 provider 对象。需要隐藏运行时上下文时用官方的
   `suppressRuntimeContext()`（作用于调用方 scope）+ 过滤 `team:*` 由注册而不是删改。
 - **召回契约**（2026-11-09 真机修复）：每轮召回 query 必须是**本轮用户原话**
@@ -151,6 +181,9 @@ docs/DESIGN-v2.md       # 本文件
 | profiles | 配置档（JSON：persona/model/tools/reply/prompt 覆盖） |
 | bindings | scope → profile，priority |
 | sessions | peer → dsh session_id + 会话级 cwd |
+| messages + messages_fts | 对话轮次（触发回复的那条 + 助手回复），记忆提炼/历史检索用，14 天清理 |
+| flow_messages | 全量群消息（门控前落库，含没 @ 的旁观发言），群分析/日报用，独立保留期 |
+| daily_reports | 群日报（bot+peer+day 唯一）：payload_json 稳定契约 + text + 投递状态 |
 | memories + memories_fts | 长期记忆（bot 级共享），FTS5 trigram |
 | kb_docs / kb_chunks + kb_chunks_fts | 知识库，FTS5 trigram |
 | members / personas / stickers | 群友库 / 人格卡 / 表情包（均 bot 级） |

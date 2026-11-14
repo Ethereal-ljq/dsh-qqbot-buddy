@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  CAPABILITY_TOOLS, DEFAULT_CAPABILITIES, collectDiscovered, computePolicy, buildToolGuide,
+  CAPABILITY_TOOLS, DEFAULT_CAPABILITIES, collectDiscovered, computePolicy, buildToolGuide, applyToolPolicy,
 } from '../lib/host/tools.js';
 import { isToolAllowed } from '../lib/tools/catalog.js';
 import { botCwdOf, sessionIdFor } from '../lib/host/agent.js';
@@ -100,3 +100,42 @@ test('sessionId/cwd 确定性', () => {
 test('CAPABILITY_TOOLS 与 DEFAULT_CAPABILITIES 键一致', () => {
   assert.deepEqual(Object.keys(CAPABILITY_TOOLS).sort(), Object.keys(DEFAULT_CAPABILITIES).sort());
 });
+test('两档策略：被动工具默认不给 restrict，激活后才进 allow', () => {
+  const view = viewOf(['read', 'web_search', 'qqbot_send_file'], ['read', 'web_search']);
+  const discovered = collectDiscovered(view);
+  const settings = { tools: { capabilities: { workspace: true, web: true } } };
+  const held = computePolicy({ settings, discovered, isActive: (name) => name !== 'read' });
+  assert.deepEqual(held.allow, ['web_search']);
+  assert.deepEqual(held.held, ['read'], '被动且未激活的全局工具不进 allow');
+  const lit = computePolicy({ settings, discovered, isActive: () => true });
+  assert.deepEqual(lit.allow.slice().sort(), ['read', 'web_search']);
+  assert.deepEqual(lit.held, []);
+});
+
+test('applyToolPolicy：集合不变则复用，变化则挂新撤旧', () => {
+  const calls = [];
+  const disposed = [];
+  const agentCtx = {
+    tools: {
+      view: () => viewOf(['read', 'web_search'], ['read', 'web_search']),
+      restrict: (filter) => {
+        calls.push(filter.allow.slice());
+        return () => { disposed.push('disposed'); };
+      },
+    },
+  };
+  const settings = { tools: { capabilities: { workspace: true, web: true } } };
+  const first = applyToolPolicy(agentCtx, {}, { settings, isActive: () => true });
+  assert.equal(first.applied, true);
+  assert.deepEqual(calls.length, 1);
+  const second = applyToolPolicy(agentCtx, {}, { settings, isActive: () => true, previous: first });
+  assert.equal(second.applied, false, '集合不变不重复 restrict');
+  assert.equal(second.reused, true);
+  assert.equal(calls.length, 1);
+  assert.equal(disposed.length, 0, '复用时不释放旧手柄');
+  const third = applyToolPolicy(agentCtx, {}, { settings, isActive: (name) => name !== 'read', previous: second });
+  assert.equal(third.applied, true);
+  assert.deepEqual(calls.length, 2);
+  assert.equal(disposed.length, 1, '挂上新限制后才释放旧的');
+});
+

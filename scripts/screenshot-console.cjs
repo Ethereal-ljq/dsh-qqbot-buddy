@@ -37,7 +37,7 @@ const fs = require('node:fs');
   await page.waitForTimeout(1500);
   await shot('02-overview');
 
-  for (const [route, name] of [['/bots', '03-bots'], ['/profiles', '04-profiles'], ['/tools', '05-tools'], ['/knowledge', '06-knowledge'], ['/settings', '07-settings'], ['/audit', '08-audit']]) {
+  for (const [route, name] of [['/bots', '03-bots'], ['/profiles', '04-profiles'], ['/tools', '05-tools'], ['/knowledge', '06-knowledge'], ['/audit', '08-audit']]) {
     await page.goto(base + '/#' + route, { waitUntil: 'networkidle' });
     await page.waitForTimeout(700);
     await shot(name);

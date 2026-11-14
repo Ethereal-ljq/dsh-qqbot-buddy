@@ -23,12 +23,36 @@ import { useApi } from '../state/useApi';
 import type { SkillItem, ToolItem } from '../api/types';
 
 type TabId = 'tools' | 'skills';
+type TierFilter = 'all' | 'active' | 'passive' | 'unclassified';
+
+/**
+ * 装配三态格子（2026-11-14）：已装载 / 已声明 / 索引中。
+ * 三者互不替代——已装载但未声明 = 只在索引里等 qqbot_enable 点亮。
+ */
+function AssemblyCell({ on, label, hint }: { on: boolean | null | undefined; label: string; hint: string }) {
+  if (on === null || on === undefined) return <span className="muted" title={hint}>—</span>;
+  return (
+    <span className="cell-inline" title={hint}>
+      <StatusDot tone={on ? 'ok' : 'idle'} />
+      <span className={on ? '' : 'muted'}>{on ? label : '—'}</span>
+    </span>
+  );
+}
+
+/** 某行的生效档位（覆盖优先，其次后端算好的默认档位）。 */
+function effectiveTier(item: ToolItem, draft: ToolPolicy | null): 'active' | 'passive' {
+  const override = draft?.tiers?.[item.name];
+  if (override === 'active' || override === 'passive') return override;
+  return item.tier === 'passive' ? 'passive' : 'active';
+}
 
 export function ToolsPage() {
   const { botId, bots, profiles, activeProfile, reloadState, notify } = useApp();
   const [tab, setTab] = useState<TabId>('tools');
   const [profileId, setProfileId] = useState('');
   const [filter, setFilter] = useState('');
+  const [tierFilter, setTierFilter] = useState<TierFilter>('all');
+  const [view, setView] = useState<'list' | 'groups' | 'sessions'>('list');
 
   useEffect(() => {
     if (profiles.length === 0) {
@@ -47,6 +71,11 @@ export function ToolsPage() {
     (signal) => (profileId ? api.skills(profileId, signal) : Promise.resolve(null)),
     [profileId],
   );
+  // 会话诊断：每个 live peer 的激活组 / 声明工具 / 提示词字符数
+  const sessions = useApi(
+    (signal) => (botId ? api.toolSessions(botId, signal) : Promise.resolve(null)),
+    [botId],
+  );
 
   const [toolsDraft, setToolsDraft] = useState<ToolPolicy | null>(null);
   const [skillsDraft, setSkillsDraft] = useState<SkillPolicy | null>(null);
@@ -55,6 +84,12 @@ export function ToolsPage() {
   // 手动自愈：重启后 resume 的会话可能丢掉插件工具（实测 36 -> 7），
   // 这个按钮给一个立即生效的入口，不用等自动自愈的下一轮。
   const [healingTools, setHealingTools] = useState(false);
+  // 刷新发现（2026-11-14）：重新扫描工具/技能清单，报告「新增 / 消失」，并高亮失效工具与失效策略条目。
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveryNote, setDiscoveryNote] = useState('');
+  const [onlyBroken, setOnlyBroken] = useState(false);
+  // 清理「当前环境已不存在」的工具条目（服务端直接落库，不需要再点保存）
+  const [cleaningTools, setCleaningTools] = useState(false);
 
   const toolsKey = tools.data ? JSON.stringify(tools.data.policy) : '';
   const skillsKey = skills.data ? JSON.stringify(skills.data.policy) : '';
@@ -69,14 +104,39 @@ export function ToolsPage() {
   const toolsDirty = Boolean(toolsDraft && tools.data && JSON.stringify(toolsDraft) !== JSON.stringify(tools.data.policy));
   const skillsDirty = Boolean(skillsDraft && skills.data && JSON.stringify(skillsDraft) !== JSON.stringify(skills.data.policy));
 
+  const stalePolicy = tools.data?.stale?.policy ?? [];
+  const brokenCount = tools.data?.stateSummary?.disabled ?? 0;
   const keyword = filter.trim().toLowerCase();
   const toolRows = useMemo(() => {
+    let items = tools.data?.items ?? [];
+    if (onlyBroken) items = items.filter((item) => item.state === 'disabled');
+    if (keyword !== '') {
+      items = items.filter((item) =>
+        [item.name, item.source || '', item.description || ''].some((field) => field.toLowerCase().includes(keyword)),
+      );
+    }
+    if (tierFilter !== 'all') {
+      items = items.filter((item) => {
+        const tier = effectiveTier(item, toolsDraft);
+        if (tierFilter === 'unclassified') return item.classified === false;
+        return tier === tierFilter;
+      });
+    }
+    return items;
+  }, [tools.data, keyword, tierFilter, toolsDraft, onlyBroken]);
+
+  const tierCounts = useMemo(() => {
     const items = tools.data?.items ?? [];
-    if (keyword === '') return items;
-    return items.filter((item) =>
-      [item.name, item.source || '', item.description || ''].some((field) => field.toLowerCase().includes(keyword)),
-    );
-  }, [tools.data, keyword]);
+    let active = 0;
+    let passive = 0;
+    let unclassified = 0;
+    for (const item of items) {
+      if (item.classified === false) unclassified += 1;
+      if (effectiveTier(item, toolsDraft) === 'passive') passive += 1;
+      else active += 1;
+    }
+    return { active, passive, unclassified, total: items.length };
+  }, [tools.data, toolsDraft]);
 
   const visibleNames = useMemo(() => {
     if (!tools.data) return null;
@@ -117,6 +177,45 @@ export function ToolsPage() {
     });
   };
 
+  /** 能力组（后端已按 profile 返回 groups/groupState）。 */
+  const groupCards = useMemo(() => {
+    const groups = tools.data?.groups ?? [];
+    const states = new Map((tools.data?.groupState ?? []).map((group) => [group.id, group]));
+    const items = new Map((tools.data?.items ?? []).map((item) => [item.name, item]));
+    return groups.map((group) => {
+      const override = toolsDraft?.tiers?.[group.id] ?? '';
+      const tools0 = group.tools.map((name) => items.get(name)).filter((item): item is ToolItem => Boolean(item));
+      const passiveCount = tools0.filter((item) => effectiveTier(item, toolsDraft) === 'passive').length;
+      const defaultTier = tools0.length === 0
+        ? '—'
+        : passiveCount === tools0.length
+          ? '按需'
+          : passiveCount === 0
+            ? '常驻'
+            : '混合（' + passiveCount + '/' + tools0.length + ' 按需）';
+      return {
+        ...group,
+        override,
+        defaultTier,
+        available: states.get(group.id)?.capability === null
+          ? tools0.length > 0
+          : Boolean(states.get(group.id)),
+        items: tools0,
+        passiveCount,
+      };
+    });
+  }, [tools.data, toolsDraft]);
+
+  const setGroupTier = (groupId: string, tier: '' | 'active' | 'passive') => {
+    setToolsDraft((prev) => {
+      if (!prev) return prev;
+      const tiers = { ...(prev.tiers ?? {}) };
+      if (tier === '') delete tiers[groupId];
+      else tiers[groupId] = tier;
+      return { ...prev, tiers };
+    });
+  };
+
   const saveTools = async () => {
     if (!profileId || !toolsDraft) return;
     setSavingTools(true);
@@ -130,6 +229,64 @@ export function ToolsPage() {
       notify(error.unimplemented ? 'info' : 'error', error.unimplemented ? '工具策略接口尚未装配' : '保存失败：' + error.message, error.code);
     } finally {
       setSavingTools(false);
+    }
+  };
+
+  /**
+   * 刷新发现：重新扫一遍工具/技能清单。
+   * 结果里带「新增 / 消失」——消失的就是现在已经失效的工具（插件卸载、改名、能力被删），
+   * 配合下方的「失效」过滤和策略失效条目提示一起看。
+   */
+  const rediscover = async () => {
+    setDiscovering(true);
+    setDiscoveryNote('');
+    try {
+      const result = await api.action('refresh-discovery', {});
+      const added = Array.isArray(result?.added) ? (result.added as string[]) : [];
+      const removed = Array.isArray(result?.removed) ? (result.removed as string[]) : [];
+      const toolCount = Number(result?.tools ?? 0);
+      const skillCount = Number(result?.skills ?? 0);
+      const parts = ['发现 ' + toolCount + ' 个工具 / ' + skillCount + ' 个技能'];
+      if (added.length > 0) parts.push('新增 ' + added.length + ' 个：' + added.slice(0, 8).join('、') + (added.length > 8 ? '…' : ''));
+      if (removed.length > 0) parts.push('消失 ' + removed.length + ' 个：' + removed.slice(0, 8).join('、') + (removed.length > 8 ? '…' : ''));
+      const note = parts.join('；');
+      setDiscoveryNote(note);
+      notify(removed.length > 0 ? 'info' : 'ok', note);
+      tools.reload();
+    } catch (err) {
+      const error = toApiError(err);
+      notify('error', '刷新发现失败：' + error.message);
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  /**
+   * 一键清理策略里「当前环境已不存在」的工具条目（allow/deny/tiers）。
+   *
+   * 和「刷新发现」的分工：刷新发现是诊断（告诉你谁没了），这里是执行（把它们从配置里删掉并落库）。
+   */
+  const cleanupStale = async () => {
+    if (!profileId) {
+      notify('info', '请先选择配置档');
+      return;
+    }
+    setCleaningTools(true);
+    try {
+      const result = await api.cleanupTools(profileId);
+      const names = result.removed.map((item) => item.name);
+      if (names.length === 0) {
+        notify('info', '没有需要清理的条目：策略里的工具在当前环境都还存在');
+      } else {
+        notify('ok', '已清理 ' + names.length + ' 个失效条目：' + names.slice(0, 8).join('、') + (names.length > 8 ? '…' : ''));
+      }
+      tools.reload();
+      await reloadState();
+    } catch (err) {
+      const error = toApiError(err);
+      notify(error.unimplemented ? 'info' : 'error', '清理失败：' + error.message);
+    } finally {
+      setCleaningTools(false);
     }
   };
 
@@ -202,9 +359,88 @@ export function ToolsPage() {
       title: '工具',
       render: (item) => (
         <div className="cell-stack">
-          <span className="mono cell-title">{item.name}</span>
+          <span className="cell-inline">
+            <span className="mono cell-title">{item.name}</span>
+            {item.classified === false ? <span className="badge warn" title="catalog 未登记档位，默认按「常驻」处理">未分类</span> : null}
+            {item.state === 'disabled' ? (
+              <span className="badge warn" title={item.reason || '当前策略下不可用'}>不可用</span>
+            ) : null}
+          </span>
           {item.description ? <span className="cell-sub ellipsis" title={item.description}>{truncate(item.description, 110)}</span> : null}
         </div>
+      ),
+    },
+    {
+      key: 'tier',
+      title: '档位',
+      width: '132px',
+      render: (item) => {
+        const override = toolsDraft?.tiers?.[item.name] ?? '';
+        const tier = effectiveTier(item, toolsDraft);
+        const groupLabel = item.group || item.capability || '';
+        const title = override !== ''
+          ? '已覆盖为「' + (override === 'active' ? '常驻' : '按需') + '」，保存后生效'
+          : '跟随内置分档：' + (tier === 'active' ? '常驻（每次请求都声明）' : '按需（默认不声明，qqbot_enable 或触发词点亮）')
+            + (groupLabel ? '；分组：' + groupLabel : '');
+        return (
+          <select
+            className="input select-compact"
+            value={override}
+            disabled={!toolsDraft}
+            title={title}
+            aria-label={'档位 ' + item.name}
+            onChange={(event) => {
+              const next = event.target.value as '' | 'active' | 'passive';
+              setToolsDraft((prev) => {
+                if (!prev) return prev;
+                const tiers = { ...(prev.tiers ?? {}) };
+                if (next === '') delete tiers[item.name];
+                else tiers[item.name] = next;
+                return { ...prev, tiers };
+              });
+            }}
+          >
+            <option value="">默认（{tier === 'active' ? '常驻' : '按需'}）</option>
+            <option value="active">常驻</option>
+            <option value="passive">按需</option>
+          </select>
+        );
+      },
+    },
+    {
+      key: 'loaded',
+      title: '已装载',
+      width: '86px',
+      render: (item) => (
+        <AssemblyCell
+          on={item.loaded}
+          label="已装载"
+          hint="已装载：该工具所属插件在本会话启动时注册（可被调用、也可被 qqbot_enable 点亮）。不等于会进请求 schema。"
+        />
+      ),
+    },
+    {
+      key: 'declared',
+      title: '已声明',
+      width: '86px',
+      render: (item) => (
+        <AssemblyCell
+          on={item.declared}
+          label="已声明"
+          hint="已声明：每次请求的 tools schema 里都有它（常驻档）。这些才占提示词 token。"
+        />
+      ),
+    },
+    {
+      key: 'indexed',
+      title: '索引中',
+      width: '86px',
+      render: (item) => (
+        <AssemblyCell
+          on={item.indexed}
+          label="索引中"
+          hint="索引中：只在提示词的【按需能力】索引里出现名字（不带 schema）；模型调用 qqbot_enable 装载后，下一步才进 schema。"
+        />
       ),
     },
     {
@@ -351,6 +587,13 @@ export function ToolsPage() {
                 ? (toolAllowFallback ? ' · 白名单为空 → 按能力开关放行' : ' · 放行 ' + toolsDraft.allow.length)
                 : ' · 屏蔽 ' + toolsDraft.deny.length}
               {' · '}已保存策略下可见 {visibleNames ? visibleNames.size : '—'} 项
+              {' · '}档位：常驻 {tierCounts.active} / 按需 {tierCounts.passive}
+              {tierCounts.unclassified > 0 ? '（未分类 ' + tierCounts.unclassified + '，按常驻处理）' : ''}
+            </span>
+            <span className="muted" title="装配期由 agent preset 决定：已声明=每次请求都带 schema；索引中=只在提示词索引里出现，qqbot_enable 装载后下一步进 schema">
+              装配：已声明 {tools.data.stateSummary?.declared ?? '—'} · 索引中 {tools.data.stateSummary?.indexed ?? '—'}
+              {' · '}不可用 {tools.data.stateSummary?.disabled ?? '—'}
+              {tools.data.preset ? ' · preset ' + tools.data.preset.id : ''}
             </span>
             {toolAllowFallback ? (
               <span className="muted">勾选/取消会以当前可见集合为基准生成白名单</span>
@@ -422,10 +665,39 @@ export function ToolsPage() {
               <h2 className="panel-title">工具白名单</h2>
               <p className="panel-desc">
                 白名单非空时只放行勾选工具（宿主工具与 QQBot 插件工具统一生效）；白名单为空时按能力开关放行；
-                黑名单只屏蔽勾选项。策略在创建新会话时应用：改完请发 /new 或重启该 bot。
+                黑名单只屏蔽勾选项。<strong>档位</strong>决定“此刻声明不声明”：常驻工具每次请求都带 schema，
+                按需工具默认不声明（不花 token），由用户触发词或模型调用 <span className="mono">qqbot_enable</span> 点亮。
+                <br />
+                <strong>已装载</strong>=插件已注册到会话；<strong>已声明</strong>=每次请求的 schema 里有它（占 token）；
+                <strong>索引中</strong>=只在提示词的【按需能力】索引里出现名字，装载后下一步才进 schema。
+                装配（常驻工具集）由 agent preset 在会话创建时决定：改完请发 /new 或重启该 bot。
               </p>
             </div>
             <div className="panel-tools">
+              <div className="segmented" role="group" aria-label="视图">
+                <button
+                  type="button"
+                  className={'seg-btn' + (view === 'list' ? ' active' : '')}
+                  onClick={() => setView('list')}
+                >
+                  列表
+                </button>
+                <button
+                  type="button"
+                  className={'seg-btn' + (view === 'groups' ? ' active' : '')}
+                  onClick={() => setView('groups')}
+                >
+                  能力组 {groupCards.length}
+                </button>
+                <button
+                  type="button"
+                  className={'seg-btn' + (view === 'sessions' ? ' active' : '')}
+                  onClick={() => { setView('sessions'); sessions.reload(); }}
+                >
+                  会话诊断{sessions.data ? ' ' + sessions.data.count : ''}
+                </button>
+              </div>
+              <span className="toolbar-divider" aria-hidden="true" />
               <div className="segmented">
                 <button
                   type="button"
@@ -452,6 +724,24 @@ export function ToolsPage() {
               <button
                 type="button"
                 className="btn btn-sm btn-ghost"
+                disabled={discovering}
+                title="重新扫描工具/技能清单，并对比上次发现结果：报告新增、消失（已失效）的工具"
+                onClick={() => void rediscover()}
+              >
+                {discovering ? '发现中…' : '刷新发现'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                disabled={cleaningTools || !profileId}
+                title="把策略里指向「当前环境已不存在」的工具/分组条目删掉并立即保存（失效工具）"
+                onClick={() => void cleanupStale()}
+              >
+                {cleaningTools ? '清理中…' : '清理工具' + (stalePolicy.length > 0 ? ' ' + stalePolicy.length : '')}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
                 disabled={healingTools}
                 title="把 qqbot_*/memory_* 等插件工具重新挂到当前会话（修复重启后「这轮没挂工具」）"
                 onClick={() => void healTools()}
@@ -475,9 +765,189 @@ export function ToolsPage() {
                   onChange={(event) => setFilter(event.target.value)}
                 />
               </label>
+              <div className="segmented" role="group" aria-label="按档位筛选">
+                {([['all', '全部'], ['active', '常驻'], ['passive', '按需'], ['unclassified', '未分类']] as Array<[TierFilter, string]>).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={'seg-btn' + (tierFilter === id ? ' active' : '')}
+                    onClick={() => setTierFilter(id)}
+                  >
+                    {label}
+                    {id === 'all'
+                      ? ' ' + tierCounts.total
+                      : id === 'active'
+                        ? ' ' + tierCounts.active
+                        : id === 'passive'
+                          ? ' ' + tierCounts.passive
+                          : ' ' + tierCounts.unclassified}
+                  </button>
+                ))}
+              </div>
+              <div className="segmented" role="group" aria-label="按装配状态筛选">
+                <button
+                  type="button"
+                  className={'seg-btn' + (onlyBroken ? ' active' : '')}
+                  disabled={brokenCount === 0}
+                  title="只显示当前不可用的工具（能力关闭 / 插件未装载 / 被策略屏蔽）"
+                  onClick={() => setOnlyBroken((value) => !value)}
+                >
+                  失效 {brokenCount}
+                </button>
+              </div>
               {toolsDirty ? <span className="dirty-flag">未保存</span> : null}
             </div>
-            {toolsBody()}
+
+            {discoveryNote !== '' ? (
+              <div className="panel-pad">
+                <div className="note note-pending">
+                  <span className="note-title">刷新发现</span>
+                  <span className="note-text">{discoveryNote}</span>
+                </div>
+              </div>
+            ) : null}
+
+            {stalePolicy.length > 0 ? (
+              <div className="panel-pad">
+                <div className="note note-pending">
+                  <span className="note-title">策略里有 {stalePolicy.length} 个失效条目</span>
+                  <span className="note-text">
+                    这些名字在发现清单里已经不存在（插件卸载 / 改名 / 工具被移除）：
+                    {stalePolicy.slice(0, 10).map((entry) => entry.name + '（' + entry.where + '）').join('、')}
+                    {stalePolicy.length > 10 ? '…' : ''}
+                  </span>
+                  <button type="button" className="btn btn-sm" disabled={cleaningTools} onClick={() => void cleanupStale()}>
+                    {cleaningTools ? '清理中…' : '清理并保存'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {view === 'sessions' ? (
+              <div className="panel-pad">
+                <div className="sessions-toolbar">
+                  <span className="muted">
+                    {sessions.data
+                      ? '当前 ' + sessions.data.count + ' 个 live 会话' + (sessions.data.note ? ' · ' + sessions.data.note : '')
+                      : '正在读取会话…'}
+                  </span>
+                  <button type="button" className="btn btn-sm btn-ghost" disabled={sessions.loading} onClick={() => sessions.reload()}>
+                    {sessions.loading ? '刷新中…' : '刷新'}
+                  </button>
+                </div>
+                {sessions.error ? (
+                  <ErrorNote error={sessions.error} onRetry={sessions.reload} />
+                ) : (sessions.data?.items.length ?? 0) === 0 ? (
+                  <EmptyState
+                    compact
+                    title="没有 live 会话"
+                    description="机器人启动并收到消息后，这里会显示每个 peer 的被动能力激活状态、本次声明的工具与提示词字符数。"
+                  />
+                ) : (
+                  <DataTable
+                    columns={[
+                      {
+                        key: 'peer',
+                        title: '会话 peer',
+                        render: (item) => (
+                          <div className="cell-stack">
+                            <span className="mono cell-title">{item.peer}</span>
+                            <span className="mono cell-sub">{item.sessionId ? item.sessionId.slice(0, 24) : '—'}</span>
+                          </div>
+                        ),
+                      },
+                      {
+                        key: 'groups',
+                        title: '本轮激活',
+                        width: '220px',
+                        render: (item) => (
+                          <div className="tag-list">
+                            {item.groups.length === 0
+                              ? <span className="muted">—</span>
+                              : item.groups.map((group) => <span className="tag" key={group}>{group}</span>)}
+                            {item.tools.map((tool) => <span className="tag mono" key={tool}>{tool}</span>)}
+                          </div>
+                        ),
+                      },
+                      {
+                        key: 'declared',
+                        title: '本次声明工具',
+                        width: '150px',
+                        render: (item) => (
+                          <span className="cell-inline mono">
+                            {item.declared.length}
+                            {item.passiveDeclared.length > 0
+                              ? <span className="muted">（按需 {item.passiveDeclared.length}）</span>
+                              : null}
+                          </span>
+                        ),
+                      },
+                      {
+                        key: 'prompt',
+                        title: '提示词',
+                        width: '110px',
+                        render: (item) => <span className="mono">{item.promptChars} 字符</span>,
+                      },
+                      {
+                        key: 'error',
+                        title: '',
+                        render: (item) => (item.error ? <span className="cell-error">{truncate(item.error, 40)}</span> : null),
+                      },
+                    ]}
+                    rows={sessions.data?.items ?? []}
+                    rowKey={(item) => item.peer}
+                    loading={sessions.loading}
+                  />
+                )}
+              </div>
+            ) : view === 'groups' ? (
+              <div className="tool-groups">
+                {groupCards.length === 0 ? (
+                  <EmptyState compact title="没有能力组" description="后端未返回分组信息（旧版本控制台或工具发现未装配）。" />
+                ) : groupCards.map((group) => (
+                  <div className={'tool-group' + (group.available ? '' : ' is-unavailable')} key={group.id}>
+                    <div className="tool-group-head">
+                      <span className="tool-group-title">{group.label}</span>
+                      <span className="tag mono tool-group-id">{group.id}</span>
+                      {group.capability && group.capability !== group.id
+                        ? <span className="tag">{group.capability}</span>
+                        : null}
+                      {group.available ? null : <span className="tag">能力未开</span>}
+                    </div>
+                    <div className="tool-group-tools">
+                      {group.items.length === 0 ? (
+                        <span className="muted">组内工具当前不可用</span>
+                      ) : group.items.map((item) => (
+                        <span
+                          key={item.name}
+                          className={'tag mono' + (effectiveTier(item, toolsDraft) === 'passive' ? ' tag-passive' : '')}
+                          title={effectiveTier(item, toolsDraft) === 'passive' ? '按需（默认不声明）' : '常驻'}
+                        >
+                          {item.name}
+                        </span>
+                      ))}
+                    </div>
+                    <div className="tool-group-desc">
+                      默认：{group.defaultTier}；组级覆盖对整组生效（单个工具仍可在列表里单独改）。
+                    </div>
+                    <div className="tool-group-actions">
+                      <select
+                        className="input select-compact"
+                        value={group.override}
+                        disabled={!toolsDraft}
+                        aria-label={'组档位 ' + group.id}
+                        onChange={(event) => setGroupTier(group.id, event.target.value as '' | 'active' | 'passive')}
+                      >
+                        <option value="">跟随默认（{group.defaultTier}）</option>
+                        <option value="active">整组常驻</option>
+                        <option value="passive">整组按需</option>
+                      </select>
+                      <span className="muted">{group.items.length} 个工具</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : toolsBody()}
           </div>
           {tools.data?.note ? <p className="panel-note">{tools.data.note}</p> : null}
         </section>

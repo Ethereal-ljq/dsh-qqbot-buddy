@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>群日报 · dark</title>
+__FONTS_CSS__
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #05070A; }
+  body { display: flex; justify-content: center; padding: 32px; }
+  .card {
+    width: 1080px;
+    background: #0B0F15;
+    color: #E7EDF5;
+    padding: 54px 64px 42px;
+    position: relative;
+    font-family: 'Noto Sans CJK SC', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    border: 1px solid #1D2734;
+    background-image:
+      radial-gradient(1200px 300px at 85% -10%, rgba(94,234,212,.10), transparent 60%),
+      radial-gradient(900px 260px at 0% 110%, rgba(245,158,11,.07), transparent 60%);
+  }
+  .scan { position: absolute; inset: 0; pointer-events: none; opacity: .25;
+    background-image: linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px);
+    background-size: 100% 4px; }
+
+  .top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .mark { display: flex; align-items: baseline; gap: 14px; }
+  .mark .dot { width: 9px; height: 9px; border-radius: 50%; background: #5EEAD4; box-shadow: 0 0 14px #5EEAD4; align-self: center; }
+  .mark .en { font-family: 'JBMono', monospace; font-size: 14px; letter-spacing: .22em; color: #5EEAD4; }
+  .mark .cn { font-size: 15px; letter-spacing: .3em; color: #8FA3B8; }
+  .date { text-align: right; font-family: 'JBMono', monospace; }
+  .date .d { font-size: 22px; letter-spacing: .1em; color: #E7EDF5; }
+  .date .w { margin-top: 4px; font-size: 11px; letter-spacing: .22em; color: #64748B; }
+
+  h1 { margin: 34px 0 0; font-size: 58px; line-height: 1.22; font-weight: 700; letter-spacing: .01em; }
+  .lead { margin: 14px 0 0; font-size: 21px; line-height: 1.85; color: #9FB0C3; max-width: 860px; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 30px; }
+  .stat { background: #10161F; border: 1px solid #1D2734; padding: 16px 18px 14px; position: relative; overflow: hidden; }
+  .stat:after { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: #5EEAD4; opacity: .8; }
+  .stat .num { font-family: 'Grotesk', 'JBMono', monospace; font-weight: 700; font-size: 38px; line-height: 1; color: #E7EDF5; }
+  .stat .num small { font-size: 13px; color: #64748B; margin-left: 5px; font-weight: 500; }
+  .stat .lab { margin-top: 9px; font-family: 'JBMono', monospace; font-size: 11px; letter-spacing: .18em; color: #64748B; text-transform: uppercase; }
+
+  .sec { margin-top: 32px; }
+  .sec-h { display: flex; align-items: center; gap: 12px; }
+  .sec-h .t { font-family: 'JBMono', monospace; font-size: 12px; letter-spacing: .24em; color: #5EEAD4; text-transform: uppercase; }
+  .sec-h .cn { font-size: 15px; letter-spacing: .18em; color: #8FA3B8; }
+  .sec-h .line { flex: 1; height: 1px; background: linear-gradient(90deg, #1D2734, transparent); }
+
+  .topic { margin-top: 16px; padding: 16px 20px; background: #0F141C; border: 1px solid #1A2330; border-left: 2px solid #5EEAD4; }
+  .topic h3 { margin: 0; font-size: 23px; line-height: 1.45; font-weight: 700; }
+  .topic p { margin: 6px 0 0; font-size: 17px; line-height: 1.8; color: #9FB0C3; }
+  .qline { margin-top: 7px; font-size: 16px; line-height: 1.75; color: #C8D4E2; }
+  .qline .b { color: #5EEAD4; }
+  .qline .w { font-family: 'JBMono', monospace; font-size: 11px; color: #64748B; margin-left: 8px; }
+
+  .qgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; margin-top: 14px; }
+  .qcard { background: #0F141C; border: 1px solid #1A2330; padding: 14px 16px 12px; position: relative; }
+  .qcard .qm { position: absolute; right: 12px; top: 4px; font-family: 'Instrument', serif; font-size: 42px; line-height: 1; color: rgba(94,234,212,.18); }
+  .qcard .txt { font-size: 18px; line-height: 1.7; color: #E7EDF5; padding-right: 18px; }
+  .qcard .who { margin-top: 8px; font-family: 'JBMono', monospace; font-size: 11px; letter-spacing: .08em; color: #5EEAD4; }
+  .qcard .why { margin-top: 5px; font-size: 15px; line-height: 1.65; color: #7B8CA0; }
+
+  .hours { display: flex; align-items: flex-end; gap: 3px; height: 56px; margin-top: 14px; }
+  .hour { flex: 1; background: #1B2634; border-radius: 1px 1px 0 0; min-height: 2px; }
+  .hour.peak { background: #5EEAD4; box-shadow: 0 0 10px rgba(94,234,212,.35); }
+  .hlab { display: flex; justify-content: space-between; margin-top: 5px; font-family: 'JBMono', monospace; font-size: 9px; letter-spacing: .12em; color: #4B5B6E; }
+
+  .spk { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 34px; margin-top: 12px; }
+  .sp { display: flex; align-items: center; gap: 10px; font-size: 16px; }
+  .sp .rk { font-family: 'JBMono', monospace; font-size: 11px; color: #5EEAD4; width: 20px; }
+  .sp .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #C8D4E2; }
+  .sp .bar { width: 120px; height: 3px; background: #1B2634; position: relative; }
+  .sp .bar i { position: absolute; inset: 0 auto 0 0; background: #5EEAD4; opacity: .75; }
+  .sp .n { font-family: 'JBMono', monospace; font-size: 12px; color: #64748B; width: 38px; text-align: right; }
+
+  .footer { margin-top: 32px; padding-top: 14px; border-top: 1px solid #1A2330; display: flex; justify-content: space-between; font-family: 'JBMono', monospace; font-size: 10px; letter-spacing: .14em; color: #4B5B6E; }
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="scan"></div>
+  <div class="top">
+    <div class="mark"><span class="dot"></span><span class="en">DAILY LOG</span><span class="cn">群日报</span></div>
+    <div class="date"><div class="d" id="date"></div><div class="w" id="week"></div></div>
+  </div>
+
+  <h1 id="title"></h1>
+  <p class="lead" id="lead"></p>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="sec" id="topics-sec">
+    <div class="sec-h"><span class="t">Topics</span><span class="cn">今日话题</span><span class="line"></span></div>
+    <div id="topics"></div>
+  </div>
+
+  <div class="sec" id="quotes-sec">
+    <div class="sec-h"><span class="t">Quotes</span><span class="cn">群聊金句</span><span class="line"></span></div>
+    <div class="qgrid" id="quotes"></div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-h"><span class="t">Activity</span><span class="cn">全天节奏</span><span class="line"></span></div>
+    <div class="hours" id="hours"></div>
+    <div class="hlab"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
+  </div>
+
+  <div class="sec">
+    <div class="sec-h"><span class="t">Speakers</span><span class="cn">活跃榜</span><span class="line"></span></div>
+    <div class="spk" id="speakers"></div>
+  </div>
+
+  <div class="footer"><span id="foot-left">QQ GROUP DIGEST · GENERATED BY YUYU</span><span id="foot-right"></span></div>
+</div>
+<script>
+(function () {
+  var d = window.__CARD_DATA__ || {};
+  var report = d.report || {};
+  var stats = d.stats || {};
+  function esc(v) {
+    return String(v === null || v === undefined ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function $(id) { return document.getElementById(id); }
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+  var day = d.day || '';
+  var dt = day ? new Date(day + 'T00:00:00') : new Date();
+  var week = ['SUNDAY','MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'][dt.getDay()] || '';
+  $('date').textContent = (day || '').replace(/-/g, '.');
+  $('week').textContent = week + ' · NO.' + (d.meta && d.meta.digest ? String(d.meta.digest).slice(0, 6).toUpperCase() : 'DAILY');
+
+  $('title').textContent = String(report.title || '今日群聊').replace(/^群聊?日报[：:·\s]+/, '');
+  $('lead').textContent = report.lead || '';
+
+  var top = (stats.topSpeakers || []).slice(0, 4);
+  var peak = 0, peakN = 0;
+  (stats.hours || []).forEach(function (n, i) { if (n > peakN) { peakN = n; peak = i; } });
+  var rows = [
+    { n: stats.total || 0, u: 'MSG', l: 'MESSAGES' },
+    { n: stats.speakers || 0, u: 'PP', l: 'SPEAKERS' },
+    { n: peak ? pad(peak) : '—', u: ':00', l: 'PEAK HOUR', small: 30 },
+    { n: top[0] ? top[0].name : '—', u: '', l: 'TOP VOICE', small: 22 }
+  ];
+  $('stats').innerHTML = rows.map(function (s) {
+    return '<div class="stat"><div class="num" style="' + (s.small ? 'font-size:' + s.small + 'px;line-height:1.5;' : '') + '">'
+      + esc(s.n) + (s.u ? '<small>' + esc(s.u) + '</small>' : '') + '</div><div class="lab">' + esc(s.l) + '</div></div>';
+  }).join('');
+
+  var topics = Array.isArray(report.topics) ? report.topics : [];
+  if (topics.length === 0) {
+    $('topics-sec').style.display = 'none';
+  } else {
+    $('topics').innerHTML = topics.map(function (t) {
+      var qs = (t.quotes || []).map(function (q) {
+        return '<div class="qline"><span class="b">「</span>' + esc(q.text) + '<span class="b">」</span><span class="w">' + esc(q.name || '有人') + '</span></div>';
+      }).join('');
+      return '<div class="topic"><h3>' + esc(t.title) + '</h3>'
+        + (t.summary ? '<p>' + esc(t.summary) + '</p>' : '') + qs + '</div>';
+    }).join('');
+  }
+
+  var quotes = Array.isArray(report.quotes) ? report.quotes : [];
+  if (quotes.length === 0) {
+    $('quotes-sec').style.display = 'none';
+  } else {
+    $('quotes').innerHTML = quotes.slice(0, 6).map(function (q) {
+      return '<div class="qcard"><span class="qm">”</span><div class="txt">' + esc(q.text) + '</div>'
+        + '<div class="who">— ' + esc(q.name || '有人') + '</div>'
+        + (q.why ? '<div class="why">' + esc(q.why) + '</div>' : '') + '</div>';
+    }).join('');
+  }
+
+  var speakers = (stats.topSpeakers || []).slice(0, 8);
+  var max = speakers.length ? speakers[0].count : 1;
+  $('speakers').innerHTML = speakers.map(function (s, i) {
+    var w = Math.max(4, Math.round((s.count / max) * 100));
+    return '<div class="sp"><span class="rk">' + pad(i + 1) + '</span><span class="nm">' + esc(s.name) + '</span>'
+      + '<span class="bar"><i style="width:' + w + '%"></i></span><span class="n">' + s.count + '</span></div>';
+  }).join('');
+
+  var hours = Array.isArray(stats.hours) && stats.hours.length === 24 ? stats.hours : new Array(24).fill(0);
+  var hmax = Math.max.apply(null, hours.concat([1]));
+  $('hours').innerHTML = hours.map(function (n, i) {
+    var h = Math.max(2, Math.round((n / hmax) * 56));
+    return '<div class="' + (i === peak ? 'hour peak' : 'hour') + '" style="height:' + h + 'px" title="' + i + ':00 · ' + n + '"></div>';
+  }).join('');
+
+  var now = new Date();
+  $('foot-right').textContent = 'GENERATED ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ' · ' + (d.day || '');
+  window.__CARD_READY__ = true;
+})();
+</script>
+</body>
+</html>

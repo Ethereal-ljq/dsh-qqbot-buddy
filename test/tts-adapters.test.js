@@ -10,17 +10,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { spawnSync } from 'node:child_process';
 
 import {
   assertHttpUrl, decodeBase64Audio, describeErrorText, describePayloadError, formatOfMediaType,
   getByPath, mimeTypeFor, sniffAudioMediaType, truncate,
 } from '../lib/core/tts/http.js';
-import { encodeWav } from '../lib/core/tts/audio.js';
+import { encodeWav, parseWav } from '../lib/core/tts/audio.js';
 import {
   EDGE_TOKEN_VERSION, EDGE_TRUSTED_CLIENT_TOKEN, secMsGec,
 } from '../lib/core/tts/edge-token.js';
 import { createEdgeAdapter } from '../lib/core/tts/adapters/edge.js';
-import mimoAdapter from '../lib/core/tts/adapters/mimo.js';
+import mimoAdapter, { detectSampleContainer } from '../lib/core/tts/adapters/mimo.js';
+import mimoCloneAdapter from '../lib/core/tts/adapters/mimo-clone.js';
+import mimoDesignAdapter from '../lib/core/tts/adapters/mimo-design.js';
+import { resetFfmpegCache } from '../lib/core/tts/audio.js';
+import minimaxAdapter from '../lib/core/tts/adapters/minimax.js';
+import minimaxCloneAdapter from '../lib/core/tts/adapters/minimax-clone.js';
+import minimaxDesignAdapter from '../lib/core/tts/adapters/minimax-design.js';
+import deepseekAdapter from '../lib/core/tts/adapters/deepseek.js';
 import bailianAdapter from '../lib/core/tts/adapters/bailian.js';
 import openaiAdapter from '../lib/core/tts/adapters/openai.js';
 import customAdapter from '../lib/core/tts/adapters/custom.js';
@@ -305,7 +313,7 @@ test('edge 适配器：连接失败/提前关闭/无音频/超时/取消 都给�
 
 // ── MiMo ───────────────────────────────────────────────────
 
-test('mimo 适配器：请求协议 / base64 响应 / 落盘', async () => {
+test('mimo 适配器（默认音色）：请求协议 / base64 响应 / 落盘', async () => {
   const dir = tempDir();
   try {
     const requests = [];
@@ -316,7 +324,6 @@ test('mimo 适配器：请求协议 / base64 响应 / 落盘', async () => {
     }, async () => mimoAdapter.synthesize({
       provider: provider('mimo', {
         baseUrl: 'https://api.example.com/v1/',
-        model: 'mimo-v2.5-tts',
         voice: '冰糖',
         style: '温柔一点',
       }, 'key-123'),
@@ -332,6 +339,7 @@ test('mimo 适配器：请求协议 / base64 响应 / 落盘', async () => {
     assert.equal(requests[0].init.headers['api-key'], 'key-123');
     assert.match(requests[0].init.headers['Content-Type'], /application\/json/);
     const body = JSON.parse(requests[0].init.body);
+    // 模型由 kind 固定，不再来自配置
     assert.equal(body.model, 'mimo-v2.5-tts');
     assert.deepEqual(body.messages, [
       { role: 'user', content: '温柔一点' },
@@ -344,46 +352,106 @@ test('mimo 适配器：请求协议 / base64 响应 / 落盘', async () => {
     assert.equal(result.voice, '冰糖');
     assert.equal(result.bytes, WAV.length);
     assert.deepEqual(fs.readFileSync(outPath), WAV);
+
+    // 配置档覆盖音色优先于供应商默认
+    let overrideBody = null;
+    await withFetch(async (url, init) => {
+      overrideBody = JSON.parse(init.body);
+      return jsonResponse({ choices: [{ message: { audio: { data: WAV.toString('base64') } } }] });
+    }, async () => mimoAdapter.synthesize({
+      provider: provider('mimo', { voice: '冰糖' }, 'k'),
+      text: 'x', options: { voice: '茉莉' }, outPath: path.join(dir, 'o.wav'), logger: QUIET,
+    }));
+    assert.equal(overrideBody.audio.voice, '茉莉');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('mimo 适配器：voiceclone 样本转 data URI；错误分支可读', async () => {
+test('mimo 适配器（克隆）：样本转 data URI；错误分支可读', async () => {
   const dir = tempDir();
   try {
     const samplePath = path.join(dir, 'sample.wav');
     fs.writeFileSync(samplePath, WAV);
     let capturedBody = null;
-    await withFetch(async (url, init) => {
+    const result = await withFetch(async (url, init) => {
       capturedBody = JSON.parse(init.body);
       return jsonResponse({ choices: [{ message: { audio: { data: WAV.toString('base64') } } }] });
-    }, async () => mimoAdapter.synthesize({
-      provider: provider('mimo', {
-        baseUrl: 'https://api.example.com/v1',
-        model: 'mimo-v2.5-tts-voiceclone',
-        voice: '',
-        style: '',
-        samplePath,
-      }, 'key'),
+    }, async () => mimoCloneAdapter.synthesize({
+      provider: provider('mimo-clone', { baseUrl: 'https://api.example.com/v1', samplePath }, 'key'),
       text: '克隆音色',
       options: {},
       outPath: path.join(dir, 'clone.wav'),
       logger: QUIET,
     }));
+    assert.equal(capturedBody.model, 'mimo-v2.5-tts-voiceclone');
     assert.match(capturedBody.audio.voice, /^data:audio\/wav;base64,/);
     assert.equal(Buffer.from(capturedBody.audio.voice.split(',')[1], 'base64').length, WAV.length);
+    assert.deepEqual(capturedBody.messages, [{ role: 'assistant', content: '克隆音色' }]);
+    assert.equal(result.voice, 'voiceclone');
 
-    // 缺 secret
+    // 缺样本路径
+    await assert.rejects(mimoCloneAdapter.synthesize({
+      provider: provider('mimo-clone', { samplePath: '' }, 'k'),
+      text: 'x', options: {}, outPath: path.join(dir, 'h.wav'), logger: QUIET,
+    }), (err) => err.code === 'TTS_CONFIG' && /样本音频/.test(err.message));
+
+    // 样本文件不存在
+    await assert.rejects(mimoCloneAdapter.synthesize({
+      provider: provider('mimo-clone', { samplePath: path.join(dir, 'nope.wav') }, 'k'),
+      text: 'x', options: {}, outPath: path.join(dir, 'i.wav'), logger: QUIET,
+    }), (err) => err.code === 'TTS_CONFIG' && /不存在/.test(err.message));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('mimo 适配器（文字设计）：描述作为 user 指令；错误分支可读', async () => {
+  const dir = tempDir();
+  try {
+    let capturedBody = null;
+    const result = await withFetch(async (url, init) => {
+      capturedBody = JSON.parse(init.body);
+      return jsonResponse({ choices: [{ message: { audio: { data: WAV.toString('base64') } } }] });
+    }, async () => mimoDesignAdapter.synthesize({
+      provider: provider('mimo-design', { description: '18 岁女生，清亮偏软，语速偏快' }, 'key'),
+      text: '你好呀',
+      // 配置档里即使填了风格，也不应覆盖音色描述本身
+      options: { style: '暴躁' },
+      outPath: path.join(dir, 'design.wav'),
+      logger: QUIET,
+    }));
+    assert.equal(capturedBody.model, 'mimo-v2.5-tts-voicedesign');
+    assert.deepEqual(capturedBody.messages, [
+      { role: 'user', content: '18 岁女生，清亮偏软，语速偏快' },
+      { role: 'assistant', content: '你好呀' },
+    ]);
+    assert.deepEqual(capturedBody.audio, { format: 'wav' });
+    assert.equal(result.voice, 'voicedesign');
+
+    // 缺描述
+    await assert.rejects(mimoDesignAdapter.synthesize({
+      provider: provider('mimo-design', {}, 'k'),
+      text: 'x', options: {}, outPath: path.join(dir, 'd.wav'), logger: QUIET,
+    }), (err) => err.code === 'TTS_CONFIG' && /音色描述/.test(err.message));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('mimo 适配器：缺 secret / 上游 401 / 无音频数据', async () => {
+  const dir = tempDir();
+  try {
+    // 缺 secret（三类能力共用同一鉴权）
     await assert.rejects(mimoAdapter.synthesize({
-      provider: provider('mimo', { model: 'mimo-v2.5-tts', voice: 'x' }, ''),
+      provider: provider('mimo', { voice: 'x' }, ''),
       text: 'x', options: {}, outPath: path.join(dir, 'e.wav'), logger: QUIET,
     }), (err) => err.code === 'TTS_CONFIG' && /API Key/.test(err.message));
 
     // 上游 401
     await withFetch(async () => jsonResponse({ error: { message: 'bad key' } }, 401), async () => {
       await assert.rejects(mimoAdapter.synthesize({
-        provider: provider('mimo', { model: 'mimo-v2.5-tts', voice: 'x' }, 'k'),
+        provider: provider('mimo', { voice: 'x' }, 'k'),
         text: 'x', options: {}, outPath: path.join(dir, 'f.wav'), logger: QUIET,
       }), (err) => err.code === 'TTS_UPSTREAM' && /HTTP 401/.test(err.message) && /bad key/.test(err.message));
     });
@@ -391,16 +459,286 @@ test('mimo 适配器：voiceclone 样本转 data URI；错误分支可读', asyn
     // 响应没有音频
     await withFetch(async () => jsonResponse({ choices: [{ message: {} }] }), async () => {
       await assert.rejects(mimoAdapter.synthesize({
-        provider: provider('mimo', { model: 'mimo-v2.5-tts', voice: 'x' }, 'k'),
+        provider: provider('mimo', { voice: 'x' }, 'k'),
         text: 'x', options: {}, outPath: path.join(dir, 'g.wav'), logger: QUIET,
       }), (err) => err.code === 'TTS_UPSTREAM' && /没有音频数据/.test(err.message));
     });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
-    // voiceclone 缺样本路径
-    await assert.rejects(mimoAdapter.synthesize({
-      provider: provider('mimo', { model: 'mimo-v2.5-tts-voiceclone', samplePath: '' }, 'k'),
-      text: 'x', options: {}, outPath: path.join(dir, 'h.wav'), logger: QUIET,
-    }), (err) => err.code === 'TTS_CONFIG' && /样本音频路径/.test(err.message));
+
+
+test('mimo 克隆：容器识别 + m4a 自动转码为 wav（无 ffmpeg 时给出可读错误）', async (t) => {
+  // 容器识别（纯函数）
+  assert.equal(detectSampleContainer(WAV), 'wav');
+  assert.equal(detectSampleContainer(Buffer.concat([Buffer.from('ID3'), Buffer.alloc(20)])), 'mp3');
+  assert.equal(detectSampleContainer(Buffer.concat([Buffer.from([0xff, 0xfb, 0x90, 0x64]), Buffer.alloc(20)])), 'mp3');
+  assert.equal(detectSampleContainer(Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypM4A '), Buffer.alloc(20)])), 'm4a');
+  assert.equal(detectSampleContainer(Buffer.concat([Buffer.from('OggS'), Buffer.alloc(20)])), 'ogg');
+  assert.equal(detectSampleContainer(Buffer.concat([Buffer.from('fLaC'), Buffer.alloc(20)])), 'flac');
+  assert.equal(detectSampleContainer(Buffer.from('short')), 'unknown');
+
+  const probe = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore', timeout: 5000 });
+  const hasFfmpeg = Boolean(probe && !probe.error && probe.status === 0);
+
+  const dir = tempDir();
+  try {
+    const wavPath = path.join(dir, 'sample.wav');
+    fs.writeFileSync(wavPath, WAV);
+    const m4aPath = path.join(dir, 'sample.m4a');
+    const encoded = hasFfmpeg
+      ? spawnSync('ffmpeg', ['-y', '-v', 'error', '-i', wavPath, '-c:a', 'aac', '-b:a', '96k', m4aPath], { encoding: 'utf8' })
+      : null;
+    if (hasFfmpeg && encoded && encoded.status === 0 && fs.existsSync(m4aPath) && fs.statSync(m4aPath).size > 0) {
+      let captured = null;
+      await withFetch(async (url, init) => {
+        captured = JSON.parse(init.body);
+        return jsonResponse({ choices: [{ message: { audio: { data: WAV.toString('base64') } } }] });
+      }, async () => mimoCloneAdapter.synthesize({
+        provider: provider('mimo-clone', { baseUrl: 'https://api.example.com/v1', samplePath: m4aPath }, 'key'),
+        text: '转码测试', options: {}, outPath: path.join(dir, 'out.wav'), logger: QUIET,
+      }));
+      assert.match(captured.audio.voice, /^data:audio\/wav;base64,/, 'm4a 应先转成 wav 再发送');
+      const sent = Buffer.from(captured.audio.voice.split(',')[1], 'base64');
+      assert.equal(sent.toString('ascii', 0, 4), 'RIFF');
+      assert.equal(sent.toString('ascii', 8, 12), 'WAVE');
+    } else {
+      t.diagnostic('ffmpeg 不可用或无法编码 aac，跳过 m4a 转码集成用例');
+    }
+
+    // 禁用 ffmpeg：m4a 应给出可读错误而不是把 m4a 当 wav 发出去
+    if (hasFfmpeg && fs.existsSync(m4aPath)) {
+      const previous = process.env.QQBOT_TTS_DISABLE_FFMPEG;
+      process.env.QQBOT_TTS_DISABLE_FFMPEG = '1';
+      resetFfmpegCache();
+      try {
+        await assert.rejects(mimoCloneAdapter.synthesize({
+          provider: provider('mimo-clone', { samplePath: m4aPath }, 'k'),
+          text: 'x', options: {}, outPath: path.join(dir, 'no-ffmpeg.wav'), logger: QUIET,
+        }), (err) => err.code === 'TTS_CONFIG' && /ffmpeg/.test(err.message));
+      } finally {
+        if (previous === undefined) delete process.env.QQBOT_TTS_DISABLE_FFMPEG;
+        else process.env.QQBOT_TTS_DISABLE_FFMPEG = previous;
+        resetFfmpegCache();
+      }
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+// ── MiniMax ────────────────────────────────────────────────
+
+test('minimax 适配器：T2A v2 请求 / hex 音频解码 / base_resp 错误', async () => {
+  const dir = tempDir();
+  try {
+    const requests = [];
+    const outPath = path.join(dir, 'minimax.wav');
+    const result = await withFetch(async (url, init) => {
+      requests.push({ url: String(url), init });
+      return jsonResponse({
+        data: { audio: WAV.toString('hex'), status: 2 },
+        extra_info: { audio_format: 'wav' },
+        base_resp: { status_code: 0, status_msg: 'success' },
+      });
+    }, async () => minimaxAdapter.synthesize({
+      provider: provider('minimax', {
+        baseUrl: 'https://api.example.cn',
+        model: 'speech-2.8-hd',
+        voice: 'female-shaonv',
+        speed: 1.25,
+        pitch: 2,
+        vol: 0.8,
+      }, 'mm-key'),
+      text: '你好呀',
+      options: {},
+      outPath,
+      logger: QUIET,
+    }));
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, 'https://api.example.cn/v1/t2a_v2');
+    assert.equal(requests[0].init.method, 'POST');
+    assert.equal(requests[0].init.headers.Authorization, 'Bearer mm-key');
+    const body = JSON.parse(requests[0].init.body);
+    assert.equal(body.model, 'speech-2.8-hd');
+    assert.equal(body.stream, false);
+    assert.deepEqual(body.voice_setting, { voice_id: 'female-shaonv', speed: 1.25, pitch: 2, vol: 0.8 });
+    assert.deepEqual(body.audio_setting, { sample_rate: 32000, bitrate: 128000, format: 'mp3', channel: 1 });
+    assert.equal(result.format, 'wav');
+    assert.equal(result.voice, 'female-shaonv');
+    assert.equal(result.bytes, WAV.length);
+    assert.deepEqual(fs.readFileSync(outPath), WAV);
+
+    // 鉴权失败：base_resp 1004 → TTS_CONFIG 可读错误
+    await withFetch(async () => jsonResponse({ base_resp: { status_code: 1004, status_msg: 'invalid api key' } }), async () => {
+      await assert.rejects(minimaxAdapter.synthesize({
+        provider: provider('minimax', { voice: 'female-shaonv' }, 'bad'),
+        text: 'x', options: {}, outPath: path.join(dir, 'e.wav'), logger: QUIET,
+      }), (err) => err.code === 'TTS_CONFIG' && /API Key/.test(err.message));
+    });
+
+    // 克隆/设计未生成 voiceId → 可读错误
+    await assert.rejects(minimaxCloneAdapter.synthesize({
+      provider: provider('minimax-clone', { samplePath: '/tmp/a.mp3' }, 'k'),
+      text: 'x', options: {}, outPath: path.join(dir, 'f.wav'), logger: QUIET,
+    }), (err) => err.code === 'TTS_CONFIG' && /音色 ID/.test(err.message));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('minimax 克隆 prepare：multipart 上传样本/示例音频 + voice_clone + voiceId 回填', async () => {
+  const dir = tempDir();
+  try {
+    const samplePath = path.join(dir, 'sample.wav');
+    const promptPath = path.join(dir, 'prompt.wav');
+    fs.writeFileSync(samplePath, WAV);
+    fs.writeFileSync(promptPath, WAV);
+    const calls = [];
+    let cloneBody = null;
+    const result = await withFetch(async (url, init) => {
+      calls.push({ url: String(url), init });
+      if (String(url).endsWith('/v1/files/upload')) {
+        const form = init.body;
+        const purpose = form && typeof form.get === 'function' ? form.get('purpose') : '';
+        return jsonResponse({ file: { file_id: purpose === 'prompt_audio' ? 222 : 111 }, base_resp: { status_code: 0, status_msg: 'success' } });
+      }
+      if (String(url).endsWith('/v1/voice_clone')) {
+        cloneBody = JSON.parse(init.body);
+        return jsonResponse({ voice_id: cloneBody.voice_id, base_resp: { status_code: 0, status_msg: 'success' } });
+      }
+      return jsonResponse({}, 500);
+    }, async () => minimaxCloneAdapter.prepare({
+      provider: provider('minimax-clone', {
+        baseUrl: 'https://api.example.cn',
+        samplePath,
+        promptSamplePath: promptPath,
+        promptText: '这是一段示例文本。',
+      }, 'mm-key'),
+      logger: QUIET,
+    }));
+
+    assert.equal(calls.length, 3, '上传样本 + 上传示例 + 克隆 三个请求');
+    assert.equal(calls[0].url, 'https://api.example.cn/v1/files/upload');
+    assert.equal(calls[0].init.method, 'POST');
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer mm-key');
+    assert.ok(calls[0].init.body instanceof FormData, '上传必须是 multipart FormData');
+    assert.equal(calls[0].init.body.get('purpose'), 'voice_clone');
+    assert.ok(calls[0].init.body.get('file'));
+    assert.equal(calls[1].init.body.get('purpose'), 'prompt_audio');
+    assert.equal(cloneBody.file_id, 111);
+    assert.equal(cloneBody.clone_prompt.prompt_audio, 222);
+    assert.equal(cloneBody.clone_prompt.prompt_text, '这是一段示例文本。');
+    assert.match(cloneBody.voice_id, /^[A-Za-z][A-Za-z0-9_-]{7,}$/);
+    assert.equal(result.configPatch.voiceId, cloneBody.voice_id);
+
+    // 样本文件不存在：本地即可读错误
+    await assert.rejects(minimaxCloneAdapter.prepare({
+      provider: provider('minimax-clone', { samplePath: path.join(dir, 'nope.mp3') }, 'k'),
+      logger: QUIET,
+    }), (err) => err.code === 'TTS_CONFIG' && /不存在/.test(err.message));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('minimax 设计 prepare：voice_design → voice_id + 试听音频', async () => {
+  const dir = tempDir();
+  try {
+    let requestBody = null;
+    const result = await withFetch(async (url, init) => {
+      assert.equal(String(url), 'https://api.example.cn/v1/voice_design');
+      requestBody = JSON.parse(init.body);
+      return jsonResponse({
+        voice_id: 'ttv-voice-01',
+        trial_audio: WAV.toString('hex'),
+        base_resp: { status_code: 0, status_msg: 'success' },
+      });
+    }, async () => minimaxDesignAdapter.prepare({
+      provider: provider('minimax-design', {
+        baseUrl: 'https://api.example.cn',
+        description: '低沉磁性的悬疑播音员',
+        previewText: '夜深了，古屋里只有他一人。',
+      }, 'mm-key'),
+      logger: QUIET,
+    }));
+    assert.equal(requestBody.prompt, '低沉磁性的悬疑播音员');
+    assert.equal(requestBody.preview_text, '夜深了，古屋里只有他一人。');
+    assert.equal(result.configPatch.voiceId, 'ttv-voice-01');
+    assert.equal(result.demoMimeType, 'audio/wav');
+    assert.deepEqual(Buffer.from(result.demoAudioBase64, 'base64'), WAV);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+// ── DeepSeek 官方 TTS ─────────────────────────────────────
+
+test('deepseek 官方 TTS：/v1/tools/tts 请求、wav 二进制响应、pcm 自动封装', async () => {
+  const dir = tempDir();
+  try {
+    const wavOut = path.join(dir, 'ds.wav');
+    const calls = [];
+    const result = await withFetch(async (url, init) => {
+      calls.push({ url: String(url), init });
+      return audioResponse(WAV, 'audio/wav');
+    }, async () => deepseekAdapter.synthesize({
+      provider: provider('deepseek', { baseUrl: 'https://api.deepseek.com', voice: 'stella', format: 'wav' }, 'sk-ds'),
+      text: '你好，DeepSeek。',
+      options: {},
+      outPath: wavOut,
+      logger: QUIET,
+    }));
+    assert.equal(calls[0].url, 'https://api.deepseek.com/v1/tools/tts');
+    assert.equal(calls[0].init.method, 'POST');
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer sk-ds');
+    const body = JSON.parse(calls[0].init.body);
+    assert.deepEqual(body, { text: '你好，DeepSeek。', voice_id: 'stella', format: 'wav', filter_markdown: true });
+    assert.equal(result.format, 'wav');
+    assert.equal(result.voice, 'stella');
+    assert.deepEqual(fs.readFileSync(wavOut), WAV);
+
+    // baseUrl 已带 /v1 时不重复拼
+    await withFetch(async (url) => {
+      assert.equal(String(url), 'https://api.example.com/v1/tools/tts');
+      return audioResponse(WAV, 'audio/wav');
+    }, async () => deepseekAdapter.synthesize({
+      provider: provider('deepseek', { baseUrl: 'https://api.example.com/v1', voice: 'tide' }, 'k'),
+      text: 'x', options: {}, outPath: path.join(dir, 'b.wav'), logger: QUIET,
+    }));
+
+    // pcm：裸 PCM（24kHz/16bit/mono）自动补 WAV 头
+    const pcmPath = path.join(dir, 'pcm.wav');
+    const pcmBytes = Buffer.alloc(2400, 1);
+    const pcmResult = await withFetch(async () => audioResponse(pcmBytes, 'audio/pcm'), async () => deepseekAdapter.synthesize({
+      provider: provider('deepseek', { baseUrl: 'https://api.deepseek.com', voice: 'stella', format: 'pcm' }, 'k'),
+      text: 'pcm 测试', options: {}, outPath: pcmPath, logger: QUIET,
+    }));
+    const parsed = parseWav(fs.readFileSync(pcmPath));
+    assert.equal(pcmResult.format, 'wav');
+    assert.equal(parsed.fmt.sampleRate, 24000);
+    assert.equal(parsed.fmt.channels, 1);
+    assert.equal(parsed.fmt.bitsPerSample, 16);
+    assert.deepEqual(parsed.data, pcmBytes);
+
+    // 错误：HTTP 400 JSON → 可读 TTS_UPSTREAM
+    await withFetch(async () => jsonResponse({ error: { message: 'Content Exists Risk' } }, 400), async () => {
+      await assert.rejects(deepseekAdapter.synthesize({
+        provider: provider('deepseek', { voice: 'stella' }, 'k'),
+        text: 'x', options: {}, outPath: path.join(dir, 'e.wav'), logger: QUIET,
+      }), (err) => err.code === 'TTS_UPSTREAM' && /Content Exists Risk/.test(err.message));
+    });
+
+    // 音色只允许 stella / tide
+    await assert.rejects(deepseekAdapter.synthesize({
+      provider: provider('deepseek', { voice: 'alloy' }, 'k'),
+      text: 'x', options: {}, outPath: path.join(dir, 'f.wav'), logger: QUIET,
+    }), (err) => err.code === 'TTS_CONFIG' && /stella/.test(err.message));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

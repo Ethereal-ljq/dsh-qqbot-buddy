@@ -8,6 +8,7 @@
 import { useState } from 'react';
 
 import { api, toApiError } from '../api/client';
+import { useApi } from '../state/useApi';
 import type { Bot } from '../api/types';
 import { DataTable, type Column } from '../components/DataTable';
 import { EmptyState } from '../components/EmptyState';
@@ -39,9 +40,32 @@ function isRunning(status?: string): boolean {
 export function OverviewPage() {
   const {
     state, stateError, loadingState, reloadState, health, sse, events, setBotId, notify,
-    botErrors, getBotError,
+    botErrors, getBotError, botId,
   } = useApp();
   const [busyAction, setBusyAction] = useState<string | null>(null);
+
+  // 工具档位 + live 提示词规模（概览卡）：只读，失败静默降级
+  const toolSummary = useApi(
+    (signal) => (botId ? api.toolsForBot(botId, signal) : Promise.resolve(null)),
+    [botId],
+  );
+  const sessionSummary = useApi(
+    (signal) => (botId ? api.toolSessions(botId, signal) : Promise.resolve(null)),
+    [botId],
+  );
+  const toolCounts = (() => {
+    const items = toolSummary.data?.items ?? [];
+    let active = 0;
+    let passive = 0;
+    for (const item of items) {
+      if (item.tier === 'passive') passive += 1;
+      else active += 1;
+    }
+    return { active, passive, total: items.length };
+  })();
+  const liveSessions = sessionSummary.data?.items ?? [];
+  const promptChars = liveSessions.reduce((max, item) => Math.max(max, item.promptChars || 0), 0);
+  const declaredMax = liveSessions.reduce((max, item) => Math.max(max, item.declared.length || 0), 0);
 
   const bots = state?.bots ?? [];
   const profiles = state?.profiles ?? [];
@@ -183,6 +207,36 @@ export function OverviewPage() {
           <span className="readout-num mono">{fmtNumber(bindings.length)}</span>
           <span className="readout-label">作用域绑定</span>
           <span className="readout-sub">精确 &gt; 类型通配 &gt; 默认</span>
+        </div>
+      </div>
+
+      <div className="readouts readouts-3">
+        <div className="readout">
+          <span className="readout-num mono">{toolSummary.data ? fmtNumber(toolCounts.active) + ' / ' + fmtNumber(toolCounts.passive) : '—'}</span>
+          <span className="readout-label">工具档位（常驻 / 按需）</span>
+          <span className="readout-sub">
+            {toolSummary.data
+              ? '共 ' + toolCounts.total + ' 个工具；按需默认不声明，触发词或 qqbot_enable 点亮'
+              : '选择机器人后读取该 bot 默认配置档的工具分布'}
+          </span>
+        </div>
+        <div className="readout">
+          <span className="readout-num mono">{liveSessions.length > 0 ? fmtNumber(promptChars) : '—'}</span>
+          <span className="readout-label">系统提示词（字符）</span>
+          <span className="readout-sub">
+            {liveSessions.length > 0
+              ? '取当前 live 会话最大值；本次声明工具最多 ' + declaredMax + ' 个'
+              : '没有 live 会话（机器人未启动或还没收到消息）'}
+          </span>
+        </div>
+        <div className="readout">
+          <span className="readout-num mono">{fmtNumber(liveSessions.length)}</span>
+          <span className="readout-label">Live 会话</span>
+          <span className="readout-sub">
+            {liveSessions.length > 0
+              ? '按 peer 隔离；点「会话诊断」看激活详情'
+              : '发一条消息或 /new 后出现'}
+          </span>
         </div>
       </div>
 

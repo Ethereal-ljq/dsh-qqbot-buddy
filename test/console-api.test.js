@@ -3,8 +3,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { get } from '../lib/core/db.js';
+import { routes as schemaRoutes } from '../lib/console/api/schema.js';
 import { createHarness } from './console-helpers.js';
 
 /** 登录并建一个 bot，返回 bot 实体。 */
@@ -185,6 +189,30 @@ test('settings 读写（扁平点号键/嵌套写法）与 schema', async (t) =>
   assert.ok(schema.data.sections.some((section) => section.id === 'reply'));
 });
 
+test('schema：daily.template 追加数据目录里的自定义模板', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qqbot-schema-tpl-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'templates', 'demo'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'templates', 'demo', 'index.html'), '<html></html>');
+  fs.writeFileSync(path.join(dir, 'templates', 'demo', 'meta.json'), JSON.stringify({ label: '演示模板' }));
+
+  const handler = schemaRoutes.find((route) => route.path === '/api/schema').handler;
+  const res = handler({
+    deps: {
+      config: {
+        schema: () => ({
+          items: [{ key: 'daily.template', values: [{ value: 'journal', label: '纸刊' }, { value: 'off', label: '只发文本' }] }],
+          sections: [],
+        }),
+      },
+      paths: { dataDir: dir },
+    },
+  });
+  const item = res.items.find((entry) => entry.key === 'daily.template');
+  assert.deepEqual(item.values.map((entry) => entry.value), ['journal', 'demo', 'off']);
+  assert.equal(item.values.find((entry) => entry.value === 'demo').label, '演示模板');
+});
+
 test('tools/skills：未装配发现项为空，策略按 profile 读写', async (t) => {
   const h = await createHarness();
   t.after(() => h.close());
@@ -194,7 +222,7 @@ test('tools/skills：未装配发现项为空，策略按 profile 读写', async
   const tools = await h.request('GET', '/api/tools?profile=' + profile.id);
   assert.equal(tools.status, 200);
   assert.deepEqual(tools.data.items, []);
-  assert.deepEqual(tools.data.policy, { mode: 'allow', allow: [], deny: [], extra: [] });
+  assert.deepEqual(tools.data.policy, { mode: 'allow', allow: [], deny: [], extra: [], tiers: {} });
   assert.deepEqual(tools.data.visible, []);
   assert.equal(tools.data.profileId, profile.id);
 
@@ -207,6 +235,18 @@ test('tools/skills：未装配发现项为空，策略按 profile 读写', async
   assert.deepEqual(putTools.data.policy.deny, ['write']);
   const reload = await h.request('GET', '/api/tools?profile=' + profile.id);
   assert.equal(reload.data.policy.mode, 'deny');
+
+  // 档位覆盖：只接受 active/passive，其它值丢弃
+  const putTiers = await h.request('PUT', '/api/tools/policy', {
+    body: {
+      profileId: profile.id,
+      policy: { mode: 'allow', allow: [], deny: [], tiers: { generate_image: 'passive', bash: 'active', bad: 'loud' } },
+    },
+  });
+  assert.equal(putTiers.status, 200);
+  assert.deepEqual(putTiers.data.policy.tiers, { generate_image: 'passive', bash: 'active' });
+  const reloadTiers = await h.request('GET', '/api/tools?profile=' + profile.id);
+  assert.deepEqual(reloadTiers.data.policy.tiers, { generate_image: 'passive', bash: 'active' });
 
   const badPolicy = await h.request('PUT', '/api/tools/policy', {
     body: { profileId: profile.id, policy: { mode: 'nope' } },
@@ -242,9 +282,112 @@ test('tools 发现项注入 deps.toolsDiscover 后可见', async (t) => {
   const tools = await h.request('GET', '/api/tools');
   assert.equal(tools.status, 200);
   assert.equal(tools.data.items.length, 2);
-  assert.deepEqual(tools.data.items[0], { name: 'bash', source: 'host', description: '运行 shell 命令', restrictable: true });
+  assert.deepEqual(tools.data.items[0], {
+    name: 'bash', source: 'host', description: '运行 shell 命令', restrictable: true,
+    // capability 现在由 catalog 反查（控制台三态要用它判断模块是否装配）
+    capability: 'shell', tier: 'passive', group: 'shell', classified: true,
+    // 没指定 profile → 没有生效设置，三态标 unknown 而不是瞎猜
+    state: 'unknown', loaded: null, declared: null, indexed: null,
+  });
   assert.equal(tools.data.items[1].restrictable, false);
+  assert.equal(tools.data.items[1].tier, 'active', '未登记的宿主工具默认常驻');
+  assert.equal(tools.data.items[1].classified, false, '未登记要标「未分类」');
   assert.deepEqual(tools.data.visible, ['bash']);
+  assert.deepEqual(tools.data.stateSummary, { declared: 0, indexed: 0, disabled: 0, unknown: 2 });
+  assert.equal(tools.data.preset, null, '没有 profile 时不给 preset');
+});
+
+test('tools 三态：按配置档算出「已声明 / 索引中 / 不可用」', async (t) => {
+  const h = await createHarness({
+    deps: {
+      toolsDiscover: {
+        list: () => [
+          { name: 'bash', source: 'host', description: '运行 shell 命令' },
+          { name: 'read', source: 'host', description: '读文件' },
+          { name: 'qqbot_send_file', source: 'qqbot', description: '发文件' },
+          { name: 'custom', source: 'plugin', description: '第三方工具' },
+        ],
+        visibleNames: () => ['qqbot_send_file'],
+      },
+    },
+  });
+  t.after(() => h.close());
+  await h.loginOk();
+  const bot = await setupBot(h);
+  const profiles = await h.request('GET', '/api/profiles?bot=' + bot.id);
+  const profile = profiles.data[0].id;
+  const tools = await h.request('GET', '/api/tools?profile=' + profile);
+  assert.equal(tools.status, 200);
+  const byName = new Map(tools.data.items.map((item) => [item.name, item]));
+  // 插件常驻档：已装载 + 已声明
+  assert.equal(byName.get('qqbot_send_file').state, 'declared');
+  assert.equal(byName.get('qqbot_send_file').loaded, true);
+  assert.equal(byName.get('qqbot_send_file').declared, true);
+  // 宿主被动档（workspace 默认开但 fs 模块不装配）：索引中，可 qqbot_enable 点亮
+  assert.equal(byName.get('read').state, 'indexed');
+  assert.equal(byName.get('read').loaded, false);
+  assert.equal(byName.get('read').indexed, true);
+  // 能力默认关闭（shell）：不可用 + 真实原因
+  assert.equal(byName.get('bash').state, 'disabled');
+  assert.match(byName.get('bash').reason, /未开启/);
+  // 无能力归属的第三方工具：全局注册即声明
+  assert.equal(byName.get('custom').state, 'declared');
+  assert.equal(tools.data.stateSummary.declared, 2);
+  assert.equal(tools.data.stateSummary.indexed, 1);
+  assert.equal(tools.data.stateSummary.disabled, 1);
+  assert.ok(tools.data.preset && tools.data.preset.id.startsWith('qqbot-buddy'));
+});
+
+test('tools 清理：一键删除策略里当前环境不存在的工具条目并落库', async (t) => {
+  const h = await createHarness({
+    deps: {
+      toolsDiscover: {
+        list: () => [
+          { name: 'qqbot_send_file', source: 'qqbot', description: '发文件' },
+          { name: 'bash', source: 'host', description: '命令' },
+        ],
+        visibleNames: () => ['qqbot_send_file'],
+      },
+    },
+  });
+  t.after(() => h.close());
+  await h.loginOk();
+  const bot = await setupBot(h);
+  const profiles = await h.request('GET', '/api/profiles?bot=' + bot.id);
+  const profileId = profiles.data[0].id;
+
+  // 写一份带失效条目的策略（ghost_tool / dead_tool / ghost_tier 都不在发现清单里）
+  const put = await h.request('PUT', '/api/tools/policy', {
+    body: {
+      profileId,
+      policy: {
+        mode: 'allow',
+        allow: ['qqbot_send_file', 'ghost_tool'],
+        deny: ['dead_tool'],
+        tiers: { qqbot_send_file: 'active', ghost_tier: 'passive' },
+      },
+    },
+  });
+  assert.equal(put.status, 200);
+  const before = await h.request('GET', '/api/tools?profile=' + profileId);
+  assert.equal(before.data.stale.policy.length, 3, '清理前应检测到 3 个失效条目');
+
+  const cleanup = await h.request('POST', '/api/tools/cleanup', { body: { profileId } });
+  assert.equal(cleanup.status, 200);
+  assert.deepEqual(cleanup.data.removed.map((item) => item.where + ':' + item.name).sort(), [
+    'allow:ghost_tool',
+    'deny:dead_tool',
+    'tiers:ghost_tier',
+  ]);
+  assert.deepEqual(cleanup.data.policy.allow, ['qqbot_send_file']);
+  assert.deepEqual(cleanup.data.policy.deny, []);
+  assert.deepEqual(cleanup.data.policy.tiers, { qqbot_send_file: 'active' });
+
+  // 清理后 GET 里 stale 为空；再点一次是空操作
+  const after = await h.request('GET', '/api/tools?profile=' + profileId);
+  assert.deepEqual(after.data.stale.policy, []);
+  const again = await h.request('POST', '/api/tools/cleanup', { body: { profileId } });
+  assert.deepEqual(again.data.removed, []);
 });
 
 test('kb：未装配内核时 docs 空数组、写接口 501；装配后可用', async (t) => {

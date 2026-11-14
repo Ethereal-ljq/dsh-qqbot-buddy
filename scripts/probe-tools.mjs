@@ -143,10 +143,14 @@ async function captureSnapshot(host, agent) {
     text: truncate(textOf(section && section.text), 400),
   }));
   const variables = assembly.variables && typeof assembly.variables === 'object' ? assembly.variables : {};
+  // 2026-11-14：系统提示词里只留静态段；记忆/知识/群友/时间改成运行时上下文快照
+  const OUR_SECTION_NAMES = new Set([
+    'deployment:persona-prefix', 'qqbot:guide', 'deployment:persona-suffix',
+  ]);
   const qqbotSections = [];
   for (const section of Array.isArray(assembly.sections) ? assembly.sections : []) {
     const sectionName = textOf(section && section.name);
-    if (!sectionName.startsWith('qqbot:')) continue;
+    if (!sectionName.startsWith('qqbot:') && !OUR_SECTION_NAMES.has(sectionName)) continue;
     const raw = textOf(section && section.text);
     qqbotSections.push({
       name: sectionName,
@@ -156,6 +160,11 @@ async function captureSnapshot(host, agent) {
       rendered: truncate(renderSectionText(raw, variables), 400),
     });
   }
+  // 渲染后的完整系统提示词（空段丢弃），用于断言「宿主污染段已被遮蔽/替换」
+  const promptText = (Array.isArray(assembly.sections) ? assembly.sections : [])
+    .map((section) => renderSectionText(textOf(section && section.text), variables))
+    .filter((text) => text.length > 0)
+    .join('\n\n');
   const session = agent && agent.session ? agent.session : null;
   const variableValues = {};
   for (const [variableName, value] of Object.entries(variables)) {
@@ -178,13 +187,28 @@ async function captureSnapshot(host, agent) {
     variables: Object.keys(variables).sort(),
     variableValues,
     contexts: (Array.isArray(assembly.contexts) ? assembly.contexts : []).map((entry) => textOf(entry && entry.name)),
+    contextSections: (Array.isArray(assembly.contexts) ? assembly.contexts : []).map((entry) => {
+      const contextName = textOf(entry && entry.name);
+      const rendered = renderSectionText(textOf(entry && entry.text), variables);
+      return { name: contextName, chars: rendered.length, rendered: truncate(rendered, 400) };
+    }).filter((item) => item.name.startsWith('qqbot:')),
     assemblyToolNames: (Array.isArray(assembly.tools) ? assembly.tools : []).map((tool) => textOf(tool && tool.name)).sort(),
     visibleToolNames: [...view.visible.keys()].map(String).sort(),
     knownToolNames: view.knownNames instanceof Set ? [...view.knownNames].map(String).sort() : [],
     restrictableToolNames: view.restrictableNames instanceof Set ? [...view.restrictableNames].map(String).sort() : [],
     promptChars: sections.reduce((sum, item) => sum + item.chars, 0),
+    promptText: promptText.slice(0, 20000),
   };
 }
+
+/** 宿主专属话术：出现在 QQ 机器人的系统提示词里即为污染。 */
+const BANNED_PROMPT_PHRASES = [
+  'You are an AI agent powered by DeepSeek Harness.',
+  'coding agent powered by',
+  'DeepSeek Harness Web GUI',
+  'DeepSeek Harness implementation checkout',
+  'Prefer showing the primary results within your final response',
+];
 
 function sameStringSet(a, b) {
   const left = [...new Set(a)].sort();
@@ -281,7 +305,7 @@ async function runProbe(out) {
   // ── 断言 ──
   const toolsDiff = diffList(first.visibleToolNames, second.visibleToolNames);
   const toolsStable = toolsDiff.onlyFirst.length === 0 && toolsDiff.onlySecond.length === 0;
-  const legacyQqbotNames = ['qqbot:persona', 'qqbot:guide'];
+  const legacyQqbotNames = ['deployment:persona-prefix', 'qqbot:guide'];
   const qqbotPresent = legacyQqbotNames.every((sectionName) =>
     first.qqbotSectionNames.includes(sectionName) && second.qqbotSectionNames.includes(sectionName));
   const qqbotNamesStable = sameStringSet(first.qqbotSectionNames, second.qqbotSectionNames);
@@ -294,7 +318,7 @@ async function runProbe(out) {
   const agentRecreated = firstRecord.agent !== secondRecord.agent;
   const sessionIdStable = first.sessionId !== '' && first.sessionId === second.sessionId;
 
-  const personaSection = (snapshot) => (snapshot.qqbotSections.find((item) => item.name === 'qqbot:persona') || {});
+  const personaSection = (snapshot) => (snapshot.qqbotSections.find((item) => item.name === 'deployment:persona-prefix') || {});
   const guideSection = (snapshot) => (snapshot.qqbotSections.find((item) => item.name === 'qqbot:guide') || {});
   const personaNonEmpty = (personaSection(first).renderedChars || 0) > 0
     && (personaSection(second).renderedChars || 0) > 0
@@ -331,6 +355,14 @@ async function runProbe(out) {
       secondChars: guideSection(second).renderedChars || 0,
       note: '工具指引段长度（0 = 工具指引链路未产出文本，见 SMOKE-REPORT 已知问题；不作为冷会话一致性判据）',
     },
+    promptStaticOnly: {
+      // 2026-11-14：时间/记忆/群友回系统提示词 = 每轮改写缓存前缀（实测 38% step 冷启动）
+      pass: !/现在是 \d{4}-\d{2}-\d{2}/.test(first.promptText || '')
+        && !/【长期记忆】/.test(first.promptText || '')
+        && !/【群友】/.test(first.promptText || ''),
+      sample: truncate(first.promptText || '', 120),
+      note: '系统提示词只放静态内容；时间/记忆/群友走运行时上下文快照（user 角色，只追加变化的那条）',
+    },
     sessionPersisted: {
       pass: persistedBeforeResume === true,
       beforeDispose: persistedBeforeDispose,
@@ -338,6 +370,13 @@ async function runProbe(out) {
       evidence: resumeEvidence,
     },
     sectionsStable: { pass: sectionsStable, diff: diffList(first.sectionNames, second.sectionNames) },
+    noHostContamination: {
+      // 2026-11-12 槽位化：身份/Web/交付段的官方话术必须被替换或遮蔽
+      pass: BANNED_PROMPT_PHRASES.every((phrase) => !(first.promptText || '').includes(phrase)),
+      banned: BANNED_PROMPT_PHRASES,
+      hits: BANNED_PROMPT_PHRASES.filter((phrase) => (first.promptText || '').includes(phrase)),
+      promptChars: (first.promptText || '').length,
+    },
     variablesStable: { pass: sameStringSet(first.variables, second.variables), first: first.variables, second: second.variables },
     contextsStable: { pass: sameStringSet(first.contexts, second.contexts), first: first.contexts, second: second.contexts },
   };
@@ -379,8 +418,13 @@ async function runProbe(out) {
     if (!snapshot) return {};
     return snapshot.qqbotSections.find((item) => item.name === sectionName) || {};
   };
-  const memoryRecallText = recallSection(third, 'qqbot:memory').rendered || '';
-  const knowledgeRecallText = recallSection(third, 'qqbot:knowledge').rendered || '';
+  // 记忆/知识现在是运行时上下文（user-role 快照），从 contextSections 读
+  const recallContext = (snapshot, contextName) => {
+    if (!snapshot || !Array.isArray(snapshot.contextSections)) return {};
+    return snapshot.contextSections.find((item) => item.name === contextName) || {};
+  };
+  const memoryRecallText = recallContext(third, 'qqbot:memory').rendered || '';
+  const knowledgeRecallText = recallContext(third, 'qqbot:knowledge').rendered || '';
   checks.qqbotGuideNonEmpty = {
     pass: (guideSection(first).renderedChars || 0) > 0 && (guideSection(second).renderedChars || 0) > 0,
     firstChars: guideSection(first).renderedChars || 0,
@@ -400,14 +444,14 @@ async function runProbe(out) {
     preview: truncate(memoryRecallText, 240),
     seeded: recallDebug.seededMemory,
     followup: recallDebug.followup,
-    note: '播种长期记忆 → followup 触发 recall → qqbot:memory 段应包含该记忆',
+    note: '播种长期记忆 → followup 触发 recall → qqbot:memory 运行时上下文应包含该记忆',
   };
   checks.qqbotKnowledgeRecall = {
     pass: recallDebug.seededKnowledge === true && knowledgeRecallText.includes(kbMarker),
     chars: knowledgeRecallText.length,
     preview: truncate(knowledgeRecallText, 240),
     seeded: recallDebug.seededKnowledge,
-    note: '播种知识库 → followup 触发 kb.search → qqbot:knowledge 段应包含该知识',
+    note: '播种知识库 → followup 触发 kb.search → qqbot:knowledge 运行时上下文应包含该知识',
   };
   try { await secondRecord.handle.dispose(); } catch { /* ignore */ }
 

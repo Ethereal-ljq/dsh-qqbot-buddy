@@ -24,6 +24,17 @@ test('schema 归一化：未知键告警、类型纠正、边界截断', () => {
   assert.ok(warnings.some((w) => w.includes('bogus')));
 });
 
+test('schema 归一化：allowCustom 的枚举接受安全模板名，拒绝路径', () => {
+  const ok = normalize({ daily: { template: 'minimal' } }, { scopes: ['profile'] });
+  assert.equal(ok.value.daily.template, 'minimal');
+  assert.equal(ok.warnings.some((w) => w.includes('daily.template')), false);
+  const bad = normalize({ daily: { template: '../etc/passwd' } }, { scopes: ['profile'] });
+  assert.equal(bad.value.daily.template, 'journal');
+  assert.ok(bad.warnings.some((w) => w.includes('daily.template')));
+  const builtin = normalize({ daily: { template: 'dark' } }, { scopes: ['profile'] });
+  assert.equal(builtin.value.daily.template, 'dark');
+});
+
 test('创建 bot 自动建默认配置档与 cwd', () => {
   const { store, dir } = setup();
   const bot = store.createBot({ name: '主号', appId: '123' });
@@ -34,30 +45,38 @@ test('创建 bot 自动建默认配置档与 cwd', () => {
   assert.equal(profiles.length, 1);
   assert.equal(profiles[0].isDefault, true);
   assert.equal(store.getSettings(bot.id).reply.mode, 'adaptive');
+  // 管理员门控默认开启，但名单为空 → 不强制（adminStatus 里 enforced = enabled && configured）
+  assert.equal(store.getSettings(bot.id).admin.enabled, true);
+  assert.deepEqual(store.getSettings(bot.id).admin.openids, []);
   assert.equal(store.listBots().length, 1);
 });
 
-test('分层覆盖：bot < profile < binding', () => {
+test('分层覆盖：profile < binding，admin 门控跟随配置档', () => {
   const { store } = setup();
   const bot = store.createBot({ name: 'A' });
-  // bot 层
-  store.patchSettings(bot.id, { admin: { enabled: true, openids: ['u1'] } });
-  assert.equal(store.getSettings(bot.id).admin.enabled, true);
-  // profile 层
-  store.patchSettings(bot.id, { reply: { mode: 'always' } });
+  // profile 级：写进当前默认配置档
+  store.patchSettings(bot.id, { reply: { mode: 'always' }, admin: { enabled: true, openids: ['u1'] } });
   assert.equal(store.getSettings(bot.id).reply.mode, 'always');
-  // 新建一个 profile 并绑定到群 123，覆盖 reply
+  assert.equal(store.getSettings(bot.id).admin.enabled, true);
+  // 新建一个 profile 并绑定到群 123，只覆盖 reply
   const vip = store.createProfile(bot.id, { name: '热闹群', data: { reply: { mode: 'probability' } } });
   store.upsertBinding(bot.id, 'qq:group:123', vip.id, 0);
   assert.equal(store.getEffectiveSettings(bot.id, 'group:123').reply.mode, 'probability');
   // 未绑定 peer 仍用 active profile
   assert.equal(store.getEffectiveSettings(bot.id, 'group:999').reply.mode, 'always');
+  assert.equal(store.getEffectiveSettings(bot.id, 'group:999').admin.enabled, true);
+  // admin 是 profile 级：绑到没配 admin 的档，名单为空（开关默认开着，但空名单不强制）
+  assert.deepEqual(store.getEffectiveSettings(bot.id, 'group:123').admin.openids, []);
+  assert.equal(store.getEffectiveSettings(bot.id, 'group:123').admin.enabled, true);
+  // 给该档单独配管理员
+  store.updateProfile(vip.id, { data: { admin: { enabled: true, openids: ['u-vip'] } } });
+  assert.equal(store.getEffectiveSettings(bot.id, 'group:123').admin.enabled, true);
+  assert.deepEqual(store.getEffectiveSettings(bot.id, 'group:123').admin.openids, ['u-vip']);
+  assert.deepEqual(store.getEffectiveSettings(bot.id, 'group:999').admin.openids, ['u1']);
   // 匹配结果带来源
   const resolved = store.resolveProfile(bot.id, 'group:123');
   assert.equal(resolved.source, 'binding');
   assert.equal(resolved.scope, 'qq:group:123');
-  // bot 层不受 profile 影响
-  assert.equal(store.getEffectiveSettings(bot.id, 'group:123').admin.enabled, true);
 });
 
 test('绑定匹配：精确 > 类型通配 > 平台通配', () => {

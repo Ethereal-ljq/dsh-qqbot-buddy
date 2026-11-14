@@ -45,6 +45,18 @@ test('voice.* 设置项：scope/type/default 符合契约', () => {
   assert.equal(defaults(['profile']).voice.enabled, false);
 });
 
+test('asr.* 设置项：开关 / 供应商 / 全局默认', () => {
+  assert.equal(byKey.get('asr.enabled')?.section, 'asr');
+  assert.equal(byKey.get('asr.enabled')?.scope, 'profile');
+  assert.equal(byKey.get('asr.enabled')?.type, 'boolean');
+  assert.equal(byKey.get('asr.enabled')?.default, false);
+  assert.equal(byKey.get('asr.provider')?.scope, 'profile');
+  assert.equal(byKey.get('asr.provider')?.optionsFrom, 'asrProviders');
+  assert.equal(byKey.get('asr.defaultProvider')?.scope, 'global');
+  assert.equal(byKey.get('asr.defaultProvider')?.optionsFrom, 'asrProviders');
+  assert.ok(SECTIONS.some((section) => section.id === 'asr'));
+});
+
 test('vision.* 新增项：视觉来源/独立模型/输出上限', () => {
   const mode = byKey.get('vision.mode');
   assert.ok(mode, '缺少 vision.mode');
@@ -66,6 +78,8 @@ test('optionsFrom 元数据：LLM/视觉/TTS 下拉走动态候选', () => {
     'vision.model': 'llmModels',
     'voice.provider': 'ttsProviders',
     'voice.defaultProvider': 'ttsProviders',
+    'asr.provider': 'asrProviders',
+    'asr.defaultProvider': 'asrProviders',
   };
   for (const [key, source] of Object.entries(expected)) {
     assert.equal(byKey.get(key)?.optionsFrom, source, key + ' 的 optionsFrom 应为 ' + source);
@@ -103,7 +117,7 @@ test('voice.defaultProvider 只属于 global 层', () => {
 
 test('模型类型插槽：ready 项有 settingsSection，planned 项有扩展点说明', () => {
   const payload = slotsPayload();
-  assert.deepEqual(payload.ready, ['llm', 'vision', 'voice']);
+  assert.deepEqual(payload.ready, ['llm', 'vision', 'voice', 'asr']);
   assert.ok(payload.planned.includes('imagegen'));
   const sectionIds = new Set(SECTIONS.map((section) => section.id));
   for (const slot of MODEL_SLOTS) {

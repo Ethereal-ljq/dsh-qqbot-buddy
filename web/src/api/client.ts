@@ -11,14 +11,17 @@ import type {
   AuditEntry, Binding, Bot, BotInput, Health, IngestResult, KbDoc, KbHit, LlmCatalog, Member, MemberInput,
   Memory, MemoryHit, MemorySaveResult, ModelSlotsPayload, Persona, PersonaInput, Profile, PromptPreview,
   PromptPreviewInput, SchemaPayload, SessionInfo, SettingsPayload, SkillPolicy, SkillsPayload, StateSnapshot,
-  Sticker, StickerInput, StickerQuota, ToolPolicy, ToolsPayload, TtsKind, TtsProvider, TtsProviderInput,
-  TtsProviderList, TtsTestResult,
+  Sticker, StickerInput, StickerQuota, ToolPolicy, ToolSessionsPayload, ToolsPayload, TtsAudioList, TtsKindsPayload, TtsProvider,
+  TtsProviderInput, TtsProviderList, TtsPrepareResult, TtsTestResult,
+  ReportTemplateInstallInput, ReportTemplateInstallResult, ReportTemplateMood, ReportTemplatePreview,
+  ReportTemplatesPayload,
 } from './types';
 import {
   normAudit, normBinding, normBot, normHealth, normIngest, normKbDoc, normKbHit, normLlmCatalog, normMember,
   normMemory, normMemoryHit, normModelSlots, normPersona, normProfile, normPromptPreview, normSchema, normSettings,
-  normSkills, normState, normSticker, normStickerQuota, normTools, normTtsKinds, normTtsProvider,
-  normTtsProviderList, normTtsTestResult,
+  normSkills, normState, normSticker, normStickerQuota, normToolSessions, normTools, normTtsAudioList, normTtsKinds, normTtsProvider,
+  normTtsProviderList, normTtsPrepareResult, normTtsTestResult,
+  normReportTemplateInstall, normReportTemplatePreview, normReportTemplates,
 } from './normalize';
 
 const CSRF_HEADERS: Record<string, string> = { 'X-QQBot-CSRF': '1' };
@@ -226,8 +229,12 @@ export const api = {
   async llmCatalog(signal?: AbortSignal): Promise<LlmCatalog> {
     return normLlmCatalog(await request('/models/llm', { signal }));
   },
-  async ttsKinds(signal?: AbortSignal): Promise<TtsKind[]> {
+  async ttsKinds(signal?: AbortSignal): Promise<TtsKindsPayload> {
     return normTtsKinds(await request('/models/tts/kinds', { signal }));
+  },
+  /** 克隆样本文件选择器：列目录（仅目录 + 音频文件），path 省略 = 第一个根目录。 */
+  async ttsAudioList(path?: string, signal?: AbortSignal): Promise<TtsAudioList> {
+    return normTtsAudioList(await request('/models/tts/audio/list', { query: { path }, signal }));
   },
   async ttsProviders(signal?: AbortSignal): Promise<TtsProviderList> {
     return normTtsProviderList(await request('/models/tts/providers', { signal }));
@@ -240,6 +247,10 @@ export const api = {
   },
   async deleteTtsProvider(id: string): Promise<{ ok: boolean; id: string }> {
     return request('/models/tts/providers/' + encodeURIComponent(id), { method: 'DELETE' });
+  },
+  /** 执行生成音色（MiniMax 克隆/设计）：上传样本或调用设计接口，返回 voiceId + 可选试听。 */
+  async prepareTtsProvider(id: string): Promise<TtsPrepareResult> {
+    return normTtsPrepareResult(await request('/models/tts/providers/' + encodeURIComponent(id) + '/prepare', { method: 'POST', body: {} }));
   },
   /** 合成一段测试语音；返回 base64 供页面 <audio> 试听。 */
   async testTtsProvider(id: string, text?: string): Promise<TtsTestResult> {
@@ -254,6 +265,22 @@ export const api = {
   async saveToolsPolicy(profileId: string, policy: ToolPolicy): Promise<{ profileId: string; policy: ToolPolicy }> {
     const raw = await request<{ profileId?: string; policy?: unknown }>('/tools/policy', { method: 'PUT', body: { profileId, policy } });
     return { profileId: raw?.profileId ?? profileId, policy: normTools({ policy: raw?.policy }).policy };
+  },
+  /** 一键清理「当前环境已不存在」的工具条目（失效的 allow/deny/tiers），落库后返回删掉的名字。 */
+  async cleanupTools(profileId: string): Promise<{ profileId: string; removed: Array<{ name: string; where: string }>; policy: ToolPolicy }> {
+    const raw = await request<{ profileId?: string; removed?: unknown; policy?: unknown }>('/tools/cleanup', { method: 'POST', body: { profileId } });
+    const removed = Array.isArray(raw?.removed)
+      ? (raw.removed as Array<Record<string, unknown>>).map((item) => ({ name: String(item?.name ?? ''), where: String(item?.where ?? '') })).filter((item) => item.name !== '')
+      : [];
+    return { profileId: raw?.profileId ?? profileId, removed, policy: normTools({ policy: raw?.policy }).policy };
+  },
+  /** 会话诊断：每个 live 会话的激活组 / 声明工具 / 提示词字符数。 */
+  async toolSessions(botId: string, signal?: AbortSignal): Promise<ToolSessionsPayload> {
+    return normToolSessions(await request('/tools/sessions', { query: { bot: botId }, signal }));
+  },
+  /** 工具清单按 bot 解析默认配置档（概览页用）。 */
+  async toolsForBot(botId: string, signal?: AbortSignal): Promise<ToolsPayload> {
+    return normTools(await request('/tools', { query: { bot: botId }, signal }));
   },
   async skills(profileId: string, signal?: AbortSignal): Promise<SkillsPayload> {
     return normSkills(await request('/skills', { query: { profile: profileId }, signal }));
@@ -365,6 +392,10 @@ export const api = {
   async deleteSticker(id: number, botId: string): Promise<{ ok: boolean; id: number }> {
     return request('/stickers/' + id, { method: 'DELETE', query: { bot: botId } });
   },
+  /** 表情包原图 URL（同源、走 cookie 鉴权；用于缩略图/大图预览）。 */
+  stickerFileUrl(botId: string, id: number): string {
+    return '/api/stickers/' + encodeURIComponent(String(id)) + '/file?bot=' + encodeURIComponent(botId);
+  },
   async stickerQuota(botId: string, signal?: AbortSignal): Promise<StickerQuota> {
     return normStickerQuota(await request('/stickers/quota', { query: { bot: botId }, signal }));
   },
@@ -382,6 +413,41 @@ export const api = {
       signal,
     });
     return normPromptPreview(raw);
+  },
+
+  // 群日报卡片模板（契约：.work/ui-adaptation/contract.md §3.1）
+  /** 可用模板：内置 journal/dark + <dataDir>/templates 下的自定义模板。 */
+  async listReportTemplates(signal?: AbortSignal): Promise<ReportTemplatesPayload> {
+    return normReportTemplates(await request('/reports/templates', { signal }));
+  },
+  /** 模板预览元数据（label/宽度/示例日期等）；meta=true 时不带 HTML（页面用 docUrl 进 iframe）。 */
+  async previewReportTemplate(
+    name: string,
+    options: { mood?: ReportTemplateMood; meta?: boolean } = {},
+    signal?: AbortSignal,
+  ): Promise<ReportTemplatePreview> {
+    return normReportTemplatePreview(await request('/reports/templates/preview', {
+      query: { name, mood: options.mood, meta: options.meta ? '1' : undefined },
+      signal,
+    }));
+  },
+  /**
+   * 预览文档 URL（给 iframe src 用，不走 fetch）：
+   * 独立响应带自己的窄 CSP，模板内联脚本才能执行；控制台页面 CSP 保持 script-src 'self'。
+   */
+  reportTemplatePreviewUrl(name: string, options: { mood?: ReportTemplateMood; day?: string } = {}): string {
+    const params = new URLSearchParams({ name });
+    if (options.mood) params.set('mood', options.mood);
+    if (options.day) params.set('day', options.day);
+    return '/api/reports/templates/preview/html?' + params.toString();
+  },
+  /** 安装自定义模板（files[].content 为 base64；同名覆盖用 replace）。 */
+  async installReportTemplate(input: ReportTemplateInstallInput): Promise<ReportTemplateInstallResult> {
+    return normReportTemplateInstall(await request('/reports/templates/install', { method: 'POST', body: input }));
+  },
+  /** 删除自定义模板（内置模板后端拒绝）。 */
+  async deleteReportTemplate(name: string): Promise<{ ok: boolean; name: string }> {
+    return request('/reports/templates/' + encodeURIComponent(name), { method: 'DELETE' });
   },
 
   // 审计

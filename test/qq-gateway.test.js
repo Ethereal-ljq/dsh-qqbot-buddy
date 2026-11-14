@@ -206,13 +206,14 @@ function createBotRuntime({ settings = {}, delivered = [] } = {}) {
 
 function createRig({
   settings = {}, appSecret = 'secret-1', appId = 'app-1',
-  sdk = createFakeSdk(), cfg, readyTimeoutMs, memoryCollector, members,
+  sdk = createFakeSdk(), cfg, readyTimeoutMs, memoryCollector, members, flow,
 } = {}) {
   const log = createFakeLogger();
   const ctx = createFakeCtx();
   const runtime = createRuntime({ appId, appSecret, cfg });
   if (memoryCollector) runtime.memoryCollector = memoryCollector;
   if (members) runtime.members = members;
+  if (flow) runtime.flow = flow;
   const delivered = [];
   const botRuntime = createBotRuntime({ settings, delivered });
   const factory = createQqTransportFactory({ ctx, runtime, logger: log, sdk, ...(readyTimeoutMs ? { readyTimeoutMs } : {}) });
@@ -355,6 +356,31 @@ test('群聊 adaptive 模式：非 @ 消息被缓冲（不投递），@ 后强�
   await tick(10);
   assert.equal(delivered.length, 1, '@ 消息应强制触发投递');
   assert.equal(delivered[0].peer, 'group:G1');
+  await transport.stop();
+});
+
+test('全量群消息流水：频率门控之前落库（没触发回复的消息也记）', async () => {
+  const appended = [];
+  const flow = { append: (row) => { appended.push(row); return { ok: true, created: true }; } };
+  // 关掉回复：门控会 stop，但流水在门控之前，仍应记录
+  const { transport, delivered } = createRig({ settings: { reply: { enabled: false } }, flow });
+  await transport.start();
+  await transport.bot.dispatchMessage({
+    message: {
+      kind: 'group', content: '今天吃啥', messageId: 'm-flow-1', groupOpenid: 'G-flow',
+      senderId: 'U-flow', senderName: '朝咱', timestamp: '2026-11-13T12:00:00+08:00',
+    },
+    state: {},
+    receivedAt: Date.now(),
+  });
+  await tick(5);
+  assert.equal(delivered.length, 0, 'reply.enabled=false 时不应回复');
+  assert.equal(appended.length, 1, '没触发回复的群消息也应写入全量流水');
+  assert.equal(appended[0].peer, 'group:G-flow');
+  assert.equal(appended[0].botId, 'bot-1');
+  assert.equal(appended[0].senderId, 'U-flow');
+  assert.equal(appended[0].senderName, '朝咱');
+  assert.equal(appended[0].content, '今天吃啥');
   await transport.stop();
 });
 

@@ -72,6 +72,24 @@ test('stickers API：hash 去重 → 列表 → quota → 删除文件', async (
   assert.match(quota.data.day, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal(quota.data.count, 0);
 
+  // 预览：同源流式返回原图（cookie 鉴权）
+  const preview = await fetch(h.baseUrl + '/api/stickers/' + first.data.id + '/file?bot=' + bot.id, {
+    headers: { Cookie: h.cookie },
+  });
+  assert.equal(preview.status, 200);
+  assert.equal(preview.headers.get('content-type'), 'image/gif');
+  assert.equal(Buffer.from(await preview.arrayBuffer()).toString('utf8'), 'GIF89a');
+
+  // 文件被移走后 404，前端据此显示「无预览」
+  const gone = path.join(h.dir, 'gone.png');
+  fs.writeFileSync(gone, 'PNG');
+  const ghost = await h.request('POST', '/api/stickers', { body: { botId: bot.id, name: '幽灵', file: gone } });
+  fs.rmSync(gone);
+  assert.equal((await h.request('GET', '/api/stickers/' + ghost.data.id + '/file?bot=' + bot.id)).status, 404);
+  assert.equal((await h.request('GET', '/api/stickers/999999/file?bot=' + bot.id)).status, 404);
+  // 清掉幽灵记录，后面的列表断言只关心 first
+  await h.request('DELETE', '/api/stickers/' + ghost.data.id + '?bot=' + bot.id);
+
   const removed = await h.request('DELETE', '/api/stickers/' + first.data.id + '?bot=' + bot.id);
   assert.equal(removed.status, 200, removed.text);
   assert.equal(removed.data.removed, true);

@@ -1,17 +1,20 @@
 /**
- * pages/ProfilesPage —— 配置档 + 作用域绑定。
+ * pages/ProfilesPage —— 配置档（只装配置内容）。
  *
  * 配置档编辑器完全由 GET /api/schema 的 profile 级设置项驱动（SchemaForm），
  * 保存时只提交本次修改的差异路径；schema 未装配时退回原始 JSON 编辑。
- * 绑定页维护 scope → profile 的路由（精确 > 类型通配 > bot 通配 > 默认）。
+ * 作用域绑定属于机器人（哪个群用哪份配置），已移到「机器人」页的详情抽屉。
+ *
+ * 子 tab 收敛：schema 的 15 个分节平铺成 tab 太碎，后端用 groups 把它们合并成 5 组
+ * （对话与人设 / 模型与语音 / 能力与权限 / 记忆与数据 / 群日报）。组 tab 之下按分节
+ * 纵向堆叠渲染，分节标题与说明保留；旧后端没有 groups 时自动回退成「一分节一 tab」。
  */
 import { useEffect, useMemo, useState } from 'react';
 
 import { api, toApiError } from '../api/client';
-import type { Binding, Profile, SchemaSection } from '../api/types';
+import type { Profile, SchemaGroup, SchemaSection } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { CopyButton } from '../components/CopyButton';
-import { DataTable, type Column } from '../components/DataTable';
 import { Drawer } from '../components/Drawer';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorNote } from '../components/ErrorNote';
@@ -20,24 +23,20 @@ import { PageHeader } from '../components/PageHeader';
 import { PromptPreview } from '../components/PromptPreview';
 import { SchemaForm } from '../components/SchemaForm';
 import { Badge } from '../components/Status';
-import { Tabs } from '../components/Tabs';
 import { fmtTimeSmart, prettyJson } from '../lib/format';
 import { pathsToPatch } from '../lib/objects';
 import { navigate } from '../router';
 import { useApp } from '../state/AppContext';
 import { useApi } from '../state/useApi';
 
-type TabId = 'profiles' | 'bindings';
-
-const SCOPE_PRESETS = ['qq:group:123456', 'qq:group:*', 'qq:c2c:*', '*'];
-
 export function ProfilesPage() {
   const {
-    botId, bots, profiles, activeProfile, state, reloadState, notify,
+    botId, bots, profiles, activeProfile, reloadState, notify,
   } = useApp();
-  const [tab, setTab] = useState<TabId>('profiles');
   const schema = useApi((signal) => api.schema(signal), []);
   const schemaReady = (schema.data?.items.length ?? 0) > 0;
+  /** 供 JSX 里的 map 回调使用（属性访问的收窄不跨闭包，用 const 保留）。 */
+  const schemaData = schema.data;
 
   // ── 配置档 ────────────────────────────────────────────────
   const [selectedId, setSelectedId] = useState('');
@@ -50,7 +49,7 @@ export function ProfilesPage() {
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Profile | null>(null);
   const [deleting, setDeleting] = useState(false);
-  /** 编辑区子 tab：schema section id / '__raw__' / 'preview'。 */
+  /** 编辑区顶栏 tab：schema group id / '__raw__' / 'preview'。 */
   const [editorTab, setEditorTab] = useState<string>('');
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -84,34 +83,69 @@ export function ProfilesPage() {
         label: definition?.label || (id === 'other' ? '其他' : id),
         order: definition?.order ?? (id === 'other' ? 999 : 500),
         desc: definition?.desc,
+        group: definition?.group,
       });
     }
     return sections.sort((a, b) => (a.order ?? 500) - (b.order ?? 500));
   }, [schema.data]);
 
-  const activeSection = profileSections.find((section) => section.id === editorTab) ?? null;
+  /** 一级组：把 profile 级分节按 schema.groups 合并（旧后端无 groups 时一分节一组）。 */
+  const profileGroups = useMemo<Array<SchemaGroup & { sections: SchemaSection[] }>>(() => {
+    const payload = schema.data;
+    if (!payload) return [];
+    const definitions = payload.groups && payload.groups.length > 0 ? payload.groups : null;
+    const groups = new Map<string, SchemaGroup & { sections: SchemaSection[] }>();
+    for (const section of profileSections) {
+      const definition = definitions?.find((group) => group.id === section.group);
+      const id = definition ? definition.id : (definitions ? 'other' : section.id);
+      let group = groups.get(id);
+      if (!group) {
+        group = {
+          id,
+          label: definition?.label || (definitions ? '其他' : section.label),
+          order: definition?.order ?? (definitions ? 999 : (section.order ?? 500)),
+          desc: definition?.desc,
+          sections: [],
+        };
+        groups.set(id, group);
+      }
+      group.sections.push(section);
+    }
+    return [...groups.values()].sort((a, b) => (a.order ?? 500) - (b.order ?? 500));
+  }, [profileSections, schema.data]);
 
-  const dirtyBySection = useMemo(() => {
+  const activeGroup = profileGroups.find((group) => group.id === editorTab) ?? null;
+
+  const groupBySection = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const group of profileGroups) {
+      for (const section of group.sections) map.set(section.id, group.id);
+    }
+    return map;
+  }, [profileGroups]);
+
+  const dirtyByGroup = useMemo(() => {
     const counts: Record<string, number> = {};
     if (!schema.data) return counts;
     const sectionByKey = new Map(schema.data.items.map((item) => [item.key, item.section || 'other']));
     for (const key of Object.keys(dirty)) {
       const section = sectionByKey.get(key) || 'other';
-      counts[section] = (counts[section] || 0) + 1;
+      const groupId = groupBySection.get(section) || section;
+      counts[groupId] = (counts[groupId] || 0) + 1;
     }
     return counts;
-  }, [dirty, schema.data]);
+  }, [dirty, schema.data, groupBySection]);
 
   useEffect(() => {
     if (editorTab === 'preview') return;
-    if (profileSections.some((section) => section.id === editorTab)) return;
-    // schema 未就绪时停在原始 JSON；加载完成后自动切到第一个分区
+    if (profileGroups.some((group) => group.id === editorTab)) return;
+    // schema 未就绪时停在原始 JSON；加载完成后自动切到第一个组
     if (!schemaReady) {
       if (editorTab !== '__raw__') setEditorTab('__raw__');
       return;
     }
-    setEditorTab(profileSections[0]?.id ?? '__raw__');
-  }, [profileSections, editorTab, schemaReady]);
+    setEditorTab(profileGroups[0]?.id ?? '__raw__');
+  }, [profileGroups, editorTab, schemaReady]);
 
   useEffect(() => {
     if (profiles.length === 0) {
@@ -231,132 +265,10 @@ export function ProfilesPage() {
     }
   };
 
-  // ── 绑定 ─────────────────────────────────────────────────
-  const [bindingDrawer, setBindingDrawer] = useState<{ mode: 'create' | 'edit'; binding: Binding | null } | null>(null);
-  const [bindingForm, setBindingForm] = useState({ scope: '', profileId: '', priority: 0 });
-  const [bindingError, setBindingError] = useState<string | null>(null);
-  const [bindingSaving, setBindingSaving] = useState(false);
-  const [bindingDelete, setBindingDelete] = useState<Binding | null>(null);
-  const [bindingDeleting, setBindingDeleting] = useState(false);
-
-  const bindings = useMemo(
-    () => (state?.bindings ?? []).filter((binding) => binding.botId === botId),
-    [state, botId],
-  );
-
-  const openBindingCreate = () => {
-    setBindingForm({ scope: '', profileId: activeProfile?.id ?? profiles[0]?.id ?? '', priority: 0 });
-    setBindingError(null);
-    setBindingDrawer({ mode: 'create', binding: null });
-  };
-
-  const openBindingEdit = (binding: Binding) => {
-    setBindingForm({ scope: binding.scope, profileId: binding.profileId, priority: binding.priority });
-    setBindingError(null);
-    setBindingDrawer({ mode: 'edit', binding });
-  };
-
-  const saveBinding = async () => {
-    const scope = bindingForm.scope.trim();
-    if (scope === '') {
-      setBindingError('作用域不能为空，例如 qq:group:* 或 *。');
-      return;
-    }
-    if (bindingForm.profileId === '') {
-      setBindingError('请选择要绑定的配置档。');
-      return;
-    }
-    setBindingSaving(true);
-    setBindingError(null);
-    try {
-      if (bindingDrawer?.mode === 'edit' && bindingDrawer.binding) {
-        await api.updateBinding(bindingDrawer.binding.id, {
-          scope,
-          profileId: bindingForm.profileId,
-          priority: Number(bindingForm.priority) || 0,
-        });
-        notify('ok', '已更新绑定：' + scope);
-      } else {
-        await api.upsertBinding({
-          botId,
-          scope,
-          profileId: bindingForm.profileId,
-          priority: Number(bindingForm.priority) || 0,
-        });
-        notify('ok', '已新增绑定：' + scope);
-      }
-      setBindingDrawer(null);
-      await reloadState();
-    } catch (err) {
-      setBindingError(toApiError(err).message);
-    } finally {
-      setBindingSaving(false);
-    }
-  };
-
-  const confirmDeleteBinding = async () => {
-    if (!bindingDelete) return;
-    setBindingDeleting(true);
-    try {
-      await api.deleteBinding(bindingDelete.id);
-      notify('ok', '已删除绑定：' + bindingDelete.scope);
-      setBindingDelete(null);
-      await reloadState();
-    } catch (err) {
-      const error = toApiError(err);
-      notify('error', '删除绑定失败：' + error.message, error.code);
-    } finally {
-      setBindingDeleting(false);
-    }
-  };
-
-  const bindingColumns: Array<Column<Binding>> = [
-    {
-      key: 'scope',
-      title: '作用域',
-      render: (binding) => <span className="mono scope-cell">{binding.scope}</span>,
-    },
-    {
-      key: 'profile',
-      title: '配置档',
-      render: (binding) => (
-        <span className="cell-inline">
-          {binding.profileName || profiles.find((profile) => profile.id === binding.profileId)?.name || binding.profileId}
-          {binding.profileId === activeProfile?.id ? <Badge tone="info">当前默认</Badge> : null}
-        </span>
-      ),
-    },
-    {
-      key: 'priority',
-      title: '优先级',
-      width: '92px',
-      align: 'right',
-      render: (binding) => <span className="mono">{binding.priority}</span>,
-    },
-    {
-      key: 'createdAt',
-      title: '创建时间',
-      width: '136px',
-      render: (binding) => <span className="mono cell-sub">{fmtTimeSmart(binding.createdAt)}</span>,
-    },
-    {
-      key: 'actions',
-      title: '',
-      width: '132px',
-      align: 'right',
-      render: (binding) => (
-        <div className="row-actions">
-          <button type="button" className="btn btn-sm btn-ghost" onClick={() => openBindingEdit(binding)}>编辑</button>
-          <button type="button" className="btn btn-sm btn-danger-text" onClick={() => setBindingDelete(binding)}>删除</button>
-        </div>
-      ),
-    },
-  ];
-
   if (bots.length === 0) {
     return (
       <div className="page">
-        <PageHeader title="配置档与绑定" description="配置档需要挂在机器人下；先创建机器人。" />
+        <PageHeader title="配置档" description="配置档需要挂在机器人下；先创建机器人。" />
         <section className="panel">
           <div className="panel-pad">
             <EmptyState
@@ -373,7 +285,7 @@ export function ProfilesPage() {
   if (!botId) {
     return (
       <div className="page">
-        <PageHeader title="配置档与绑定" description="先选择作用域机器人，再编辑配置档与绑定。" />
+        <PageHeader title="配置档" description="先选择机器人，再编辑它的配置档。" />
         <section className="panel">
           <div className="panel-pad">
             <EmptyState
@@ -390,30 +302,18 @@ export function ProfilesPage() {
   return (
     <div className="page">
       <PageHeader
-        title="配置档与绑定"
-        description="配置档只装可变策略（人设、模型、回复、工具）；作用域绑定决定哪个会话用哪份配置。"
+        title="配置档"
+        description="配置档只装配置内容（人设、模型、回复、工具、记忆、命令与权限…）。哪个群用哪份配置，在「机器人 → 详情 → 配置档绑定」里设置。"
         meta={(
           <span className="cell-inline">
             <Badge tone="info" mono>{botId}</Badge>
             <span className="muted">默认：{activeProfile?.name || '—'}</span>
           </span>
         )}
-        actions={tab === 'profiles'
-          ? <button type="button" className="btn btn-primary" onClick={() => setCreateOpen(true)}>新建配置档</button>
-          : <button type="button" className="btn btn-primary" onClick={openBindingCreate}>新增绑定</button>}
+        actions={<button type="button" className="btn btn-primary" onClick={() => setCreateOpen(true)}>新建配置档</button>}
       />
 
-      <Tabs
-        items={[
-          { id: 'profiles', label: '配置档', count: profiles.length },
-          { id: 'bindings', label: '作用域绑定', count: bindings.length },
-        ]}
-        value={tab}
-        onChange={(id) => setTab(id as TabId)}
-      />
-
-      {tab === 'profiles' ? (
-        <div className="master-detail">
+      <div className="master-detail">
           <aside className="master">
             <header className="master-head">
               <span className="master-title">配置档</span>
@@ -438,7 +338,7 @@ export function ProfilesPage() {
               {profiles.length === 0 ? <li className="master-empty">暂无配置档</li> : null}
             </ul>
             <p className="master-hint">
-              绑定优先于默认：精确 scope &gt; 类型通配 &gt; bot 通配 &gt; 默认配置档。
+              没有绑定匹配的会话使用默认配置档；绑定在「机器人 → 详情」里按作用域维护。
             </p>
           </aside>
 
@@ -485,21 +385,21 @@ export function ProfilesPage() {
 
                 <div className="editor-divider" />
 
-                {/* 分区子 tab（来自 /api/schema sections）+ 提示词预览 */}
-                <div className="tabs editor-tabs" role="tablist" aria-label="配置档设置分区">
-                  {schemaReady ? profileSections.map((section) => (
+                {/* 一级组 tab（schema.groups）+ 提示词预览；组内按分节纵向堆叠。 */}
+                <div className="tabs editor-tabs" role="tablist" aria-label="配置档设置分组">
+                  {schemaReady ? profileGroups.map((group) => (
                     <button
-                      key={section.id}
+                      key={group.id}
                       type="button"
                       role="tab"
-                      aria-selected={editorTab === section.id}
-                      className={'tab' + (editorTab === section.id ? ' active' : '')}
-                      onClick={() => setEditorTab(section.id)}
+                      aria-selected={editorTab === group.id}
+                      className={'tab' + (editorTab === group.id ? ' active' : '')}
+                      onClick={() => setEditorTab(group.id)}
                     >
-                      {section.label}
-                      {dirtyBySection[section.id] ? (
-                        <span className="tab-count" title={dirtyBySection[section.id] + ' 项未保存'}>
-                          {dirtyBySection[section.id]}
+                      {group.label}
+                      {dirtyByGroup[group.id] ? (
+                        <span className="tab-count" title={dirtyByGroup[group.id] + ' 项未保存'}>
+                          {dirtyByGroup[group.id]}
                         </span>
                       ) : null}
                     </button>
@@ -535,55 +435,65 @@ export function ProfilesPage() {
                     unsavedCount={dirtyCount}
                     refreshKey={selected.updatedAt}
                   />
-                ) : (
+                ) : activeGroup ? (
                   <>
-                    {activeSection?.desc ? <p className="editor-section-desc">{activeSection.desc}</p> : null}
+                    {activeGroup.desc ? <p className="editor-group-desc">{activeGroup.desc}</p> : null}
                     {schema.loading ? (
                       <p className="muted">正在加载设置 schema…</p>
-                    ) : schemaReady && schema.data ? (
-                      <SchemaForm
-                        payload={schema.data}
-                        sectionId={editorTab}
-                        values={selected.data}
-                        dirty={dirty}
-                        scopes={['profile']}
-                        showScope={false}
-                        onChange={(key, value) => setDirty((prev) => ({ ...prev, [key]: value }))}
-                      />
-                    ) : (
-                      <div className="form-stack">
-                        <ErrorNote
-                          error={schema.error ?? toApiError(new Error('schema 为空'))}
-                          onRetry={schema.reload}
-                          compact
-                        />
-                        <Field
-                          label="配置档 data（原始 JSON）"
-                          htmlFor="profile-raw"
-                          help="设置 schema 未装配时的兜底编辑；保存会整体覆盖 data。"
-                          wide
-                        >
-                          <textarea
-                            id="profile-raw"
-                            className="input mono textarea json-area"
-                            rows={12}
-                            value={rawText}
-                            spellCheck={false}
-                            onChange={(event) => {
-                              setRawText(event.target.value);
-                              try {
-                                JSON.parse(event.target.value || '{}');
-                                setRawError(null);
-                              } catch (err) {
-                                setRawError('JSON 不合法：' + (err instanceof Error ? err.message : String(err)));
-                              }
-                            }}
+                    ) : schemaData ? (
+                      activeGroup.sections.map((section) => (
+                        <section className="schema-section" key={section.id}>
+                          <header className="schema-section-head">
+                            <h3 className="schema-section-title">{section.label}</h3>
+                            {section.desc ? <p className="schema-section-desc">{section.desc}</p> : null}
+                          </header>
+                          <SchemaForm
+                            payload={schemaData}
+                            sectionId={section.id}
+                            values={selected.data}
+                            dirty={dirty}
+                            scopes={['profile']}
+                            showScope={false}
+                            onChange={(key, value) => setDirty((prev) => ({ ...prev, [key]: value }))}
                           />
-                        </Field>
-                        {rawError ? <p className="field-error">{rawError}</p> : null}
-                      </div>
+                        </section>
+                      ))
+                    ) : (
+                      <p className="muted">正在加载设置 schema…</p>
                     )}
                   </>
+                ) : (
+                  <div className="form-stack">
+                    <ErrorNote
+                      error={schema.error ?? toApiError(new Error('schema 为空'))}
+                      onRetry={schema.reload}
+                      compact
+                    />
+                    <Field
+                      label="配置档 data（原始 JSON）"
+                      htmlFor="profile-raw"
+                      help="设置 schema 未装配时的兜底编辑；保存会整体覆盖 data。"
+                      wide
+                    >
+                      <textarea
+                        id="profile-raw"
+                        className="input mono textarea json-area"
+                        rows={12}
+                        value={rawText}
+                        spellCheck={false}
+                        onChange={(event) => {
+                          setRawText(event.target.value);
+                          try {
+                            JSON.parse(event.target.value || '{}');
+                            setRawError(null);
+                          } catch (err) {
+                            setRawError('JSON 不合法：' + (err instanceof Error ? err.message : String(err)));
+                          }
+                        }}
+                      />
+                    </Field>
+                    {rawError ? <p className="field-error">{rawError}</p> : null}
+                  </div>
                 )}
               </div>
 
@@ -624,30 +534,6 @@ export function ProfilesPage() {
             </section>
           )}
         </div>
-      ) : (
-        <section className="panel">
-          <header className="panel-head">
-            <div>
-              <h2 className="panel-title">作用域绑定</h2>
-              <p className="panel-desc">UMO 风格 scope：qq:group:123456 / qq:group:* / qq:c2c:* / *；数值 priority 大者优先。</p>
-            </div>
-          </header>
-          <div className="panel-body flush">
-            <DataTable
-              columns={bindingColumns}
-              rows={bindings}
-              rowKey={(binding) => binding.id}
-              empty={(
-                <EmptyState
-                  title="还没有绑定"
-                  description="没有匹配绑定时，所有会话使用默认配置档。绑定可以按群、按会话类型或按 bot 全局覆盖。"
-                  action={<button type="button" className="btn btn-primary btn-sm" onClick={openBindingCreate}>新增绑定</button>}
-                />
-              )}
-            />
-          </div>
-        </section>
-      )}
 
       {/* 新建配置档 */}
       <Drawer
@@ -677,71 +563,6 @@ export function ProfilesPage() {
         </div>
       </Drawer>
 
-      {/* 绑定新增/编辑 */}
-      <Drawer
-        open={bindingDrawer !== null}
-        title={bindingDrawer?.mode === 'edit' ? '编辑绑定' : '新增绑定'}
-        subtitle={bindingDrawer?.mode === 'edit' ? bindingDrawer.binding?.scope : '相同 scope 重复保存会覆盖原绑定'}
-        onClose={() => { if (!bindingSaving) setBindingDrawer(null); }}
-        footer={(
-          <>
-            <button type="button" className="btn btn-ghost" disabled={bindingSaving} onClick={() => setBindingDrawer(null)}>取消</button>
-            <button type="button" className="btn btn-primary" disabled={bindingSaving} onClick={() => void saveBinding()}>
-              {bindingSaving ? '保存中…' : '保存绑定'}
-            </button>
-          </>
-        )}
-      >
-        <div className="form-stack">
-          <Field label="作用域 scope" htmlFor="binding-scope" required help="qq:group:群号 精确匹配；qq:group:* 匹配所有群；qq:c2c:* 匹配私聊；* 兜底。">
-            <input
-              id="binding-scope"
-              className="input mono"
-              value={bindingForm.scope}
-              placeholder="qq:group:*"
-              onChange={(event) => setBindingForm({ ...bindingForm, scope: event.target.value })}
-            />
-          </Field>
-          <div className="preset-row">
-            {SCOPE_PRESETS.map((preset) => (
-              <button
-                key={preset}
-                type="button"
-                className="chip chip-button mono"
-                onClick={() => setBindingForm({ ...bindingForm, scope: preset })}
-              >
-                {preset}
-              </button>
-            ))}
-          </div>
-          <Field label="绑定到配置档" htmlFor="binding-profile" required>
-            <select
-              id="binding-profile"
-              className="input"
-              value={bindingForm.profileId}
-              onChange={(event) => setBindingForm({ ...bindingForm, profileId: event.target.value })}
-            >
-              <option value="">请选择配置档</option>
-              {profiles.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.name}{profile.isDefault ? '（默认）' : ''}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="优先级 priority" htmlFor="binding-priority" help="数值越大越优先；同精度 scope 之间用它决胜。">
-            <input
-              id="binding-priority"
-              type="number"
-              className="input mono"
-              value={bindingForm.priority}
-              onChange={(event) => setBindingForm({ ...bindingForm, priority: Number(event.target.value) || 0 })}
-            />
-          </Field>
-          {bindingError ? <p className="field-error" role="alert">{bindingError}</p> : null}
-        </div>
-      </Drawer>
-
       <ConfirmDialog
         open={deleteTarget !== null}
         title="删除配置档"
@@ -765,15 +586,6 @@ export function ProfilesPage() {
         }}
       />
 
-      <ConfirmDialog
-        open={bindingDelete !== null}
-        title="删除绑定"
-        message={<span>删除作用域 <code className="inline-code mono">{bindingDelete?.scope}</code> 的绑定？删除后该会话回落到默认配置档。</span>}
-        confirmLabel="删除"
-        busy={bindingDeleting}
-        onCancel={() => { if (!bindingDeleting) setBindingDelete(null); }}
-        onConfirm={() => void confirmDeleteBinding()}
-      />
     </div>
   );
 }

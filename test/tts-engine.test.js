@@ -85,14 +85,37 @@ function bailianProvider(engine) {
   return engine.saveProvider({ name: '百炼测试', kind: 'bailian', secret: 'sk-bailian', config: {} });
 }
 
+
+test('ASR 供应商不参与 TTS：默认回退与显式选择都会被拒绝', async () => {
+  const h = setup();
+  try {
+    // 先建一个 ASR 供应商（created_at 更早，会被 firstEnabled 先命中）
+    const asr = h.engine.saveProvider({ name: 'DS ASR', kind: 'deepseek-asr', secret: 'sk', config: {} });
+    const edge = h.engine.saveProvider({ name: 'Edge', kind: 'edge' });
+    const settings = { voice: { enabled: true } };
+    // 没显式 provider 时不能回退到 ASR
+    const selection = h.engine.resolveSelection({ settings });
+    assert.equal(selection.providerId, edge.id);
+    // 把 ASR 供应商显式选成 TTS：selection 视为未选并回退；显式 synthesize 报可读错误
+    const forced = h.engine.resolveSelection({ settings: { voice: { enabled: true, provider: asr.id } } });
+    assert.equal(forced.providerId, edge.id);
+    await assert.rejects(h.engine.synthesize({ text: '你好', providerId: asr.id, outDir: h.dir }), (err) => err.code === 'TTS_CONFIG' && /ASR/.test(err.message));
+  } finally {
+    h.cleanup();
+  }
+});
+
 // ── 元数据 / CRUD ──────────────────────────────────────────
 
 test('kinds / 供应商 CRUD / secret 脱敏', () => {
   const h = setup();
   try {
     const kinds = h.engine.kinds();
-    assert.equal(kinds.length, 6);
-    assert.deepEqual(kinds.map((kind) => kind.id).sort(), ['bailian', 'command', 'custom', 'edge', 'mimo', 'openai']);
+    assert.equal(kinds.length, 16);
+    assert.deepEqual(
+      kinds.map((kind) => kind.id).sort(),
+      ['bailian', 'command', 'custom', 'deepseek', 'deepseek-asr', 'edge', 'faster-whisper', 'mimo', 'mimo-asr', 'mimo-clone', 'mimo-design', 'minimax', 'minimax-clone', 'minimax-design', 'openai', 'openai-asr'],
+    );
     // 返回的是拷贝，外部改动不影响引擎
     kinds[0].label = '被改掉';
     assert.notEqual(h.engine.kinds()[0].label, '被改掉');

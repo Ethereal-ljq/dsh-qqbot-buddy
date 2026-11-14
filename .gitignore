@@ -6,3 +6,9 @@ data/
 *.db
 *.db-wal
 *.db-shm
+dsh-image-gen/
+npm-debug.log*
+*.tgz
+
+# 本地自定义模板（带角色插画等可能涉版权的内容，不进仓库、不进 npm 包）
+custom/templates/anime/

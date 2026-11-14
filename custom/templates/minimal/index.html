@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>群日报</title>
+<!--
+  最简自定义日报模板示例。
+
+  约定：
+    1. 数据在 window.__CARD_DATA__（与 daily.js 生成的真实 payload 同形状）：
+       { day, stats: { total, speakers, topSpeakers[], hours[24] }, report: { title, lead, topics[], quotes[] }, meta }
+    2. 模板目录里写相对路径（assets/xxx.png）会被宿主自动内联成 data URI；
+       本示例不依赖任何素材，直接开始改就行。
+    3. 尺寸按 1200px 宽渲染（宿主以 --width 1200 --scale 2 出图），高度自适应。
+    4. 可选 meta.json：{ "label": "…", "description": "…", "visuals": { … } }。
+-->
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 48px;
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f2f4f0; color: #1d211c;
+  }
+  .card { width: 1104px; margin: 0 auto; background: #ffffff; border-radius: 18px; padding: 44px 48px 36px; }
+  .head { display: flex; align-items: baseline; justify-content: space-between; border-bottom: 2px solid #e6e9e2; padding-bottom: 18px; }
+  .head .day { font-size: 15px; letter-spacing: .12em; color: #7b8378; text-transform: uppercase; }
+  .head .brand { font-size: 15px; color: #4c7a5a; letter-spacing: .08em; }
+  h1 { margin: 26px 0 10px; font-size: 40px; line-height: 1.25; }
+  .lead { margin: 0 0 28px; font-size: 18px; line-height: 1.7; color: #4a5147; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 34px; }
+  .stat { background: #f7f8f5; border-radius: 12px; padding: 16px 18px; }
+  .stat .num { font-size: 26px; font-weight: 600; }
+  .stat .lab { margin-top: 4px; font-size: 13px; color: #7b8378; }
+  h2 { margin: 0 0 14px; font-size: 16px; letter-spacing: .14em; color: #4c7a5a; }
+  .topic { padding: 16px 0; border-top: 1px solid #eef0ea; }
+  .topic:first-of-type { border-top: 0; }
+  .topic h3 { margin: 0 0 6px; font-size: 20px; }
+  .topic p { margin: 0; font-size: 15px; line-height: 1.7; color: #4a5147; }
+  .topic blockquote { margin: 10px 0 0; padding-left: 12px; border-left: 3px solid #d6e2d2; font-size: 14px; color: #68705f; }
+  .quotes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 8px; }
+  .quote { background: #f7f8f5; border-radius: 12px; padding: 14px 16px; font-size: 14px; line-height: 1.6; }
+  .quote .who { margin-top: 6px; color: #7b8378; }
+  .foot { margin-top: 30px; padding-top: 16px; border-top: 1px solid #eef0ea; display: flex; justify-content: space-between; font-size: 12px; color: #9aa095; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="head">
+    <span class="day" id="day"></span>
+    <span class="brand">QQ GROUP · DAILY</span>
+  </div>
+
+  <h1 id="title">今日群聊</h1>
+  <p class="lead" id="lead"></p>
+  <div class="stats" id="stats"></div>
+
+  <h2>今日话题</h2>
+  <div id="topics"></div>
+
+  <h2 style="margin-top:30px">群聊金句</h2>
+  <div class="quotes" id="quotes"></div>
+
+  <div class="foot">
+    <span>数据来自当日群聊流水 · 由机器人自动整理</span>
+    <span id="issue"></span>
+  </div>
+</div>
+<script>
+(function () {
+  var d = window.__CARD_DATA__ || {};
+  var stats = d.stats || {};
+  var report = d.report || {};
+  function esc(v) {
+    return String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function $(id) { return document.getElementById(id); }
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+  var day = String(d.day || '');
+  var dt = day ? new Date(day + 'T00:00:00') : new Date();
+  var week = ['周日','周一','周二','周三','周四','周五','周六'][dt.getDay()] || '';
+  $('day').textContent = (day || '').replace(/-/g, ' . ') + '  ' + week;
+  $('issue').textContent = d.meta && d.meta.digest ? 'NO.' + String(d.meta.digest).slice(0, 6).toUpperCase() : 'DAILY';
+  $('title').textContent = String(report.title || '今日群聊').replace(/^群聊?日报[：:·\s]+/, '');
+  $('lead').textContent = report.lead || '';
+
+  var top = (stats.topSpeakers || []).slice(0, 1);
+  var peak = 0, peakN = 0;
+  (stats.hours || []).forEach(function (n, i) { if (n > peakN) { peakN = n; peak = i; } });
+  var rows = [
+    { num: stats.total || 0, lab: '条消息' },
+    { num: stats.speakers || 0, lab: '人发言' },
+    { num: peakN ? pad(peak) + ':00' : '—', lab: '高峰时段' },
+    { num: top[0] ? top[0].name : '—', lab: '最活跃' }
+  ];
+  $('stats').innerHTML = rows.map(function (r) {
+    return '<div class="stat"><div class="num">' + esc(r.num) + '</div><div class="lab">' + esc(r.lab) + '</div></div>';
+  }).join('');
+
+  var topics = Array.isArray(report.topics) ? report.topics : [];
+  $('topics').innerHTML = topics.map(function (t) {
+    var quotes = (Array.isArray(t.quotes) ? t.quotes : []).map(function (q) {
+      return '<blockquote>「' + esc(q.text) + '」——' + esc(q.name) + '</blockquote>';
+    }).join('');
+    return '<div class="topic"><h3>' + esc(t.title || '话题') + '</h3>'
+      + '<p>' + esc(t.summary || '') + '</p>' + quotes + '</div>';
+  }).join('') || '<div class="topic"><p>今天群里比较安静。</p></div>';
+
+  var quotes = Array.isArray(report.quotes) ? report.quotes.slice(0, 4) : [];
+  $('quotes').innerHTML = quotes.map(function (q) {
+    return '<div class="quote">「' + esc(q.text) + '」<div class="who">—— ' + esc(q.name) + (q.why ? ' · ' + esc(q.why) : '') + '</div></div>';
+  }).join('') || '<div class="quote">今天没有收录金句</div><div class="quote"></div>';
+})();
+</script>
+</body>
+</html>

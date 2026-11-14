@@ -8,11 +8,14 @@
  */
 import type {
   AuditEntry, Binding, Bot, BotRuntime, ConsoleInfo, Health, IngestResult, KbDoc, KbHit,
-  Member, Memory, Persona, Profile, SchemaItem, SchemaPayload, SchemaSection, SettingsPayload,
-  SkillItem, SkillPolicy, SkillsPayload, StateSnapshot, Sticker, StickerQuota, ToolItem, ToolPolicy,
-  ToolsPayload, MemoryHit, PromptPreview, PromptSection,
-  LlmCatalog, LlmModel, ModelSlot, ModelSlotsPayload, TtsField, TtsFieldType, TtsKind, TtsOptionItem,
-  TtsProvider, TtsProviderList, TtsTestResult,
+  Member, Memory, Persona, Profile, SchemaGroup, SchemaItem, SchemaPayload, SchemaSection, SettingsPayload,
+  SkillItem, SkillPolicy, SkillsPayload, StateSnapshot, Sticker, StickerQuota, ToolGroup, ToolItem, ToolPolicy,
+  StalePolicyEntry, ToolState, ToolStateSummary, ToolTier, ToolsPayload, ToolsPresetInfo, ToolSessionsPayload, MemoryHit,
+  PromptPreview, PromptSection, PromptTool,
+  LlmCatalog, LlmModel, ModelSlot, ModelSlotsPayload, TtsAudioEntry, TtsAudioList, TtsAudioRoot, TtsField,
+  TtsFieldType, TtsGroup, TtsKind, TtsKindsPayload, TtsOptionItem,
+  TtsProvider, TtsProviderList, TtsPrepareResult, TtsTestResult,
+  ReportTemplate, ReportTemplateInstallResult, ReportTemplateMood, ReportTemplatePreview, ReportTemplateVisuals, ReportTemplatesPayload,
 } from './types';
 import { setPath } from '../lib/objects';
 
@@ -199,6 +202,30 @@ function normSchemaItem(raw: unknown): SchemaItem {
   };
 }
 
+function normSchemaSection(raw: unknown): SchemaSection {
+  const section = rec(raw);
+  const id = str(val(section, 'id'));
+  const group = val(section, 'group');
+  return {
+    id,
+    label: str(val(section, 'label'), id),
+    order: num(val(section, 'order')),
+    desc: val(section, 'desc') === undefined ? undefined : str(val(section, 'desc')),
+    group: group === undefined || group === null || group === '' ? undefined : str(group),
+  };
+}
+
+function normSchemaGroup(raw: unknown): SchemaGroup {
+  const group = rec(raw);
+  const id = str(val(group, 'id'));
+  return {
+    id,
+    label: str(val(group, 'label'), id),
+    order: val(group, 'order') === undefined ? undefined : num(val(group, 'order')),
+    desc: val(group, 'desc') === undefined ? undefined : str(val(group, 'desc')),
+  };
+}
+
 export function normSchema(raw: unknown): SchemaPayload {
   if (Array.isArray(raw)) {
     const items = raw.map(normSchemaItem);
@@ -210,11 +237,9 @@ export function normSchema(raw: unknown): SchemaPayload {
     return { sections: [...byId.values()], items };
   }
   const r = rec(raw);
-  const sections = list(val(r, 'sections')).map((item) => {
-    const section = rec(item);
-    return { id: str(val(section, 'id')), label: str(val(section, 'label'), str(val(section, 'id'))), order: num(val(section, 'order')), desc: val(section, 'desc') === undefined ? undefined : str(val(section, 'desc')) };
-  });
-  return { sections, items: list(val(r, 'items')).map(normSchemaItem) };
+  const sections = list(val(r, 'sections')).map(normSchemaSection);
+  const groups = list(val(r, 'groups')).map(normSchemaGroup);
+  return { sections, groups: groups.length > 0 ? groups : undefined, items: list(val(r, 'items')).map(normSchemaItem) };
 }
 
 /**
@@ -247,11 +272,24 @@ export function normToolPolicy(raw: unknown): ToolPolicy {
     allow: strings(val(r, 'allow')),
     deny: strings(val(r, 'deny')),
     extra: strings(val(r, 'extra')),
+    tiers: normToolTiers(val(r, 'tiers')),
   };
+}
+
+/** 档位覆盖表：只收 active/passive，其它值丢弃（后端也会再清洗一遍）。 */
+export function normToolTiers(raw: unknown): Record<string, ToolTier> {
+  const r = rec(raw);
+  const out: Record<string, ToolTier> = {};
+  for (const [key, value] of Object.entries(r)) {
+    const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (text === 'active' || text === 'passive') out[key] = text;
+  }
+  return out;
 }
 
 function normToolItem(raw: unknown): ToolItem {
   const r = rec(raw);
+  const tierRaw = str(val(r, 'tier'));
   return {
     name: str(val(r, 'name')),
     source: val(r, 'source') === undefined ? undefined : str(val(r, 'source')),
@@ -259,7 +297,33 @@ function normToolItem(raw: unknown): ToolItem {
     restrictable: bool(val(r, 'restrictable'), true),
     enabled: val(r, 'enabled') === undefined ? undefined : bool(val(r, 'enabled')),
     visible: val(r, 'visible') === undefined ? undefined : bool(val(r, 'visible')),
+    capability: val(r, 'capability') === undefined || val(r, 'capability') === null ? null : str(val(r, 'capability')),
+    tier: tierRaw === 'active' || tierRaw === 'passive' ? tierRaw : '',
+    group: val(r, 'group') === undefined || val(r, 'group') === null ? null : str(val(r, 'group')),
+    classified: val(r, 'classified') === undefined ? true : bool(val(r, 'classified'), true),
+    state: normToolState(str(val(r, 'state'))),
+    loaded: val(r, 'loaded') === undefined || val(r, 'loaded') === null ? null : bool(val(r, 'loaded')),
+    declared: val(r, 'declared') === undefined || val(r, 'declared') === null ? null : bool(val(r, 'declared')),
+    indexed: val(r, 'indexed') === undefined || val(r, 'indexed') === null ? null : bool(val(r, 'indexed')),
+    reason: val(r, 'reason') === undefined ? undefined : str(val(r, 'reason')),
   };
+}
+
+function normToolState(raw: string): ToolState {
+  if (raw === 'declared' || raw === 'indexed' || raw === 'disabled') return raw;
+  return 'unknown';
+}
+
+function normToolGroups(raw: unknown): ToolGroup[] {
+  return list(raw).map((entry) => {
+    const r = rec(entry);
+    return {
+      id: str(val(r, 'id')),
+      label: str(val(r, 'label')),
+      capability: val(r, 'capability') === undefined || val(r, 'capability') === null ? null : str(val(r, 'capability')),
+      tools: strings(val(r, 'tools')),
+    };
+  }).filter((group) => group.id !== '');
 }
 
 export function normTools(raw: unknown): ToolsPayload {
@@ -268,8 +332,44 @@ export function normTools(raw: unknown): ToolsPayload {
     items: list(val(r, 'items')).map(normToolItem),
     policy: normToolPolicy(val(r, 'policy')),
     visible: strings(val(r, 'visible')),
+    groups: normToolGroups(val(r, 'groups')),
+    groupState: normToolGroups(val(r, 'groupState')),
+    stateSummary: normToolStateSummary(val(r, 'stateSummary')),
+    stale: normToolsStale(val(r, 'stale')),
+    preset: normToolsPreset(val(r, 'preset')),
     note: val(r, 'note') === undefined ? undefined : str(val(r, 'note')),
   };
+}
+
+function normToolStateSummary(raw: unknown): ToolStateSummary {
+  const r = rec(raw);
+  return {
+    declared: num(val(r, 'declared')),
+    indexed: num(val(r, 'indexed')),
+    disabled: num(val(r, 'disabled')),
+    unknown: num(val(r, 'unknown')),
+  };
+}
+
+function normToolsStale(raw: unknown): { policy: StalePolicyEntry[] } {
+  const r = rec(raw);
+  const policy = list(val(r, 'policy')).map((entry) => {
+    const item = rec(entry);
+    const where = str(val(item, 'where'));
+    return {
+      name: str(val(item, 'name')),
+      where: where === 'allow' || where === 'deny' || where === 'tiers' ? where : 'allow',
+    } as StalePolicyEntry;
+  }).filter((item) => item.name !== '');
+  return { policy };
+}
+
+function normToolsPreset(raw: unknown): ToolsPresetInfo | null {
+  if (raw === undefined || raw === null) return null;
+  const r = rec(raw);
+  const id = str(val(r, 'id'));
+  if (id === '') return null;
+  return { id, modules: strings(val(r, 'modules')) };
 }
 
 function normSkillItem(raw: unknown): SkillItem {
@@ -325,6 +425,8 @@ function normPromptSection(raw: unknown): PromptSection {
     text,
     chars: num(val(r, 'chars'), Array.from(text).length),
     empty: val(r, 'empty') === undefined ? text.trim() === '' : bool(val(r, 'empty')),
+    kind: val(r, 'kind') === 'ours' ? 'ours' : val(r, 'kind') === 'host' ? 'host' : undefined,
+    order: val(r, 'order') === undefined ? undefined : num(val(r, 'order')),
   };
 }
 
@@ -335,14 +437,64 @@ export function normPromptPreview(raw: unknown): PromptPreview {
   const text = val(r, 'text') === undefined
     ? sections.map((section) => section.text).filter(Boolean).join('\n\n')
     : str(val(r, 'text'));
+  const tools: PromptTool[] = list(val(r, 'tools')).map((entry) => {
+    const item = rec(entry);
+    const tier = str(val(item, 'tier'));
+    const value: PromptTool = {
+      name: str(val(item, 'name')),
+      tier: tier === 'active' ? 'active' : tier === 'passive' ? 'passive' : '',
+    };
+    return value;
+  }).filter((item) => item.name !== '');
+  const activationRaw = rec(val(r, 'activation'));
+  const contextSections = list(val(r, 'contextSections', 'context_sections')).map(normPromptSection);
   return {
     ok: bool(val(r, 'ok'), true),
     source: str(val(r, 'source'), 'composed'),
     sections,
+    contextSections,
+    contextText: str(val(r, 'contextText', 'context_text')),
+    presetId: str(val(r, 'presetId', 'preset_id')),
+    expectedPresetId: str(val(r, 'expectedPresetId', 'expected_preset_id')),
+    presetStale: bool(val(r, 'presetStale', 'preset_stale'), false),
     text,
     notes: strings(val(r, 'notes')),
     toolNames: strings(val(r, 'toolNames', 'tool_names')),
     skillNames: strings(val(r, 'skillNames', 'skill_names')),
+    chars: val(r, 'chars') === undefined ? undefined : num(val(r, 'chars')),
+    tools,
+    contexts: strings(val(r, 'contexts')),
+    variables: strings(val(r, 'variables')),
+    activation: {
+      groups: strings(val(activationRaw, 'groups')),
+      tools: strings(val(activationRaw, 'tools')),
+    },
+    liveUnavailable: val(r, 'liveUnavailable') === undefined || val(r, 'liveUnavailable') === null
+      ? null
+      : str(val(r, 'liveUnavailable')),
+  };
+}
+
+export function normToolSessions(raw: unknown): ToolSessionsPayload {
+  const r = rec(raw);
+  const items = list(val(r, 'items')).map((entry) => {
+    const item = rec(entry);
+    return {
+      peer: str(val(item, 'peer')),
+      sessionId: str(val(item, 'sessionId', 'session_id')),
+      groups: strings(val(item, 'groups')),
+      tools: strings(val(item, 'tools')),
+      declared: strings(val(item, 'declared')),
+      passiveDeclared: strings(val(item, 'passiveDeclared', 'passive_declared')),
+      promptChars: num(val(item, 'promptChars', 'prompt_chars')),
+      sections: val(item, 'sections') === undefined ? undefined : num(val(item, 'sections')),
+      error: val(item, 'error') === undefined ? undefined : str(val(item, 'error')),
+    };
+  });
+  return {
+    items,
+    count: num(val(r, 'count'), items.length),
+    note: val(r, 'note') === undefined ? undefined : str(val(r, 'note')),
   };
 }
 
@@ -448,7 +600,7 @@ function ttsOptions(value: unknown): TtsOptionItem[] {
   });
 }
 
-const TTS_FIELD_TYPES = ['text', 'textarea', 'select', 'number', 'json'];
+const TTS_FIELD_TYPES = ['text', 'textarea', 'select', 'number', 'json', 'audio'];
 
 function ttsFieldType(value: unknown): TtsFieldType {
   const text = str(value);
@@ -527,6 +679,8 @@ function normTtsField(raw: unknown): TtsField {
   if (val(r, 'max') !== undefined) field.max = num(val(r, 'max'));
   if (val(r, 'step') !== undefined) field.step = num(val(r, 'step'));
   if (val(r, 'maxLength', 'max_length') !== undefined) field.maxLength = num(val(r, 'maxLength', 'max_length'));
+  const accept = strings(val(r, 'accept'));
+  if (accept.length > 0) field.accept = accept;
   return field;
 }
 
@@ -537,6 +691,9 @@ export function normTtsKind(raw: unknown): TtsKind {
     id: str(val(r, 'id')),
     label: str(val(r, 'label'), str(val(r, 'id'))),
     short: str(val(r, 'short'), str(val(r, 'label'), str(val(r, 'id')))),
+    group: str(val(r, 'group'), 'default'),
+    groupLabel: str(val(r, 'groupLabel', 'group_label'), '默认音色 TTS'),
+    capability: str(val(r, 'capability')) === 'asr' ? 'asr' : 'tts',
     desc: str(val(r, 'desc')),
     needsSecret: bool(val(r, 'needsSecret', 'needs_secret')),
     secretLabel: str(val(r, 'secretLabel', 'secret_label')),
@@ -549,14 +706,32 @@ export function normTtsKind(raw: unknown): TtsKind {
     outputFormat: format,
     maxCharsPerRequest: num(val(r, 'maxCharsPerRequest', 'max_chars_per_request'), 2000),
     timeoutMs: num(val(r, 'timeoutMs', 'timeout_ms'), 120000),
+    ...(str(val(r, 'prepareLabel', 'prepare_label')) !== ''
+      ? { prepareLabel: str(val(r, 'prepareLabel', 'prepare_label')) }
+      : {}),
+    ...(str(val(r, 'prepareHint', 'prepare_hint')) !== ''
+      ? { prepareHint: str(val(r, 'prepareHint', 'prepare_hint')) }
+      : {}),
   };
 }
 
-/** GET /api/models/tts/kinds：兼容 {kinds:[...]} 与裸数组。 */
-export function normTtsKinds(raw: unknown): TtsKind[] {
-  if (Array.isArray(raw)) return raw.map(normTtsKind);
+/** GET /api/models/tts/kinds：兼容 {kinds:[...],groups:[...]} 与裸数组。 */
+export function normTtsKinds(raw: unknown): TtsKindsPayload {
+  const toGroup = (item: unknown, index: number): TtsGroup => {
+    const group = rec(item);
+    return {
+      id: str(val(group, 'id'), 'group-' + index),
+      label: str(val(group, 'label'), '默认音色 TTS'),
+      order: num(val(group, 'order'), index + 1),
+      desc: str(val(group, 'desc')),
+    };
+  };
+  if (Array.isArray(raw)) return { kinds: raw.map(normTtsKind), groups: [] };
   const r = rec(raw);
-  return list(val(r, 'kinds')).map(normTtsKind);
+  return {
+    kinds: list(val(r, 'kinds')).map(normTtsKind),
+    groups: list(val(r, 'groups')).map(toGroup),
+  };
 }
 
 export function normTtsProvider(raw: unknown): TtsProvider {
@@ -568,6 +743,9 @@ export function normTtsProvider(raw: unknown): TtsProvider {
     kind,
     kindLabel: str(val(r, 'kindLabel', 'kind_label'), kind),
     kindShort: str(val(r, 'kindShort', 'kind_short'), kind),
+    group: str(val(r, 'group'), 'default'),
+    groupLabel: str(val(r, 'groupLabel', 'group_label'), '默认音色 TTS'),
+    capability: str(val(r, 'capability')) === 'asr' ? 'asr' : 'tts',
     enabled: bool(val(r, 'enabled'), true),
     config: parseJson(val(r, 'config')),
     hasSecret: bool(val(r, 'hasSecret', 'has_secret')),
@@ -578,12 +756,54 @@ export function normTtsProvider(raw: unknown): TtsProvider {
   };
 }
 
+/** GET /api/models/tts/audio/list：克隆样本文件选择器。 */
+export function normTtsAudioList(raw: unknown): TtsAudioList {
+  const r = rec(raw);
+  return {
+    path: str(val(r, 'path')),
+    parent: (() => {
+      const value = val(r, 'parent');
+      return value === null || value === undefined || value === '' ? null : str(value);
+    })(),
+    roots: list(val(r, 'roots')).map((item): TtsAudioRoot => {
+      const root = rec(item);
+      return { id: str(val(root, 'id')), label: str(val(root, 'label')), path: str(val(root, 'path')) };
+    }),
+    entries: list(val(r, 'entries')).map((item): TtsAudioEntry => {
+      const entry = rec(item);
+      const parsed: TtsAudioEntry = {
+        name: str(val(entry, 'name')),
+        path: str(val(entry, 'path')),
+        type: str(val(entry, 'type')) === 'dir' ? 'dir' : 'file',
+      };
+      if (val(entry, 'ext') !== undefined) parsed.ext = str(val(entry, 'ext'));
+      const size = val(entry, 'size');
+      if (size !== undefined && size !== null) parsed.size = num(size);
+      return parsed;
+    }),
+    truncated: bool(val(r, 'truncated')),
+  };
+}
+
 /** GET /api/models/tts/providers。 */
 export function normTtsProviderList(raw: unknown): TtsProviderList {
   const r = rec(raw);
   return {
     providers: list(val(r, 'providers')).map(normTtsProvider),
     defaultProvider: str(val(r, 'defaultProvider', 'default_provider')),
+  };
+}
+
+/** POST /api/models/tts/providers/:id/prepare（克隆 / 文字设计生成音色）。 */
+export function normTtsPrepareResult(raw: unknown): TtsPrepareResult {
+  const r = rec(raw);
+  return {
+    ok: bool(val(r, 'ok'), true),
+    provider: normTtsProvider(val(r, 'provider')),
+    voiceId: str(val(r, 'voiceId', 'voice_id')),
+    demoAudioBase64: str(val(r, 'demoAudioBase64', 'demo_audio_base64')) || undefined,
+    demoMimeType: str(val(r, 'demoMimeType', 'demo_mime_type')) || undefined,
+    demoBytes: num(val(r, 'demoBytes', 'demo_bytes'), 0),
   };
 }
 
@@ -602,5 +822,83 @@ export function normTtsTestResult(raw: unknown): TtsTestResult {
     audioBase64: val(r, 'audioBase64', 'audio_base64') === undefined ? undefined : str(val(r, 'audioBase64', 'audio_base64')),
     mimeType: val(r, 'mimeType', 'mime_type') === undefined ? undefined : str(val(r, 'mimeType', 'mime_type')),
     tooLarge: val(r, 'tooLarge', 'too_large') === undefined ? undefined : bool(val(r, 'tooLarge', 'too_large')),
+  };
+}
+
+// ── 群日报卡片模板 ────────────────────────────────────────────
+
+/** 氛围值：模板自己声明，后端校验；前端原样透传（空串表示该模板没有氛围）。 */
+function normReportMood(value: unknown): ReportTemplateMood {
+  return str(value);
+}
+
+/** 模板声明的插画槽（后端 visualSummary）：缺字段按无插画处理。 */
+function normReportVisuals(raw: unknown): ReportTemplateVisuals | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = rec(raw);
+  const moods = list(val(r, 'moods')).map((item) => {
+    const m = rec(item);
+    const id = str(val(m, 'id'));
+    return id === '' ? null : { id, label: str(val(m, 'label'), id) };
+  }).filter((item): item is { id: string; label: string } => item !== null);
+  const slots = list(val(r, 'slots')).map((item) => str(item)).filter((item) => item !== '');
+  if (moods.length === 0 && slots.length === 0) return null;
+  const defaultMood = str(val(r, 'defaultMood', 'default_mood'));
+  return {
+    slots,
+    moods,
+    defaultMood: defaultMood !== '' ? defaultMood : (moods[0]?.id ?? ''),
+  };
+}
+
+function normReportTemplate(raw: unknown): ReportTemplate {
+  const r = rec(raw);
+  const name = str(val(r, 'name'));
+  return {
+    name,
+    label: str(val(r, 'label'), name),
+    description: str(val(r, 'description')),
+    builtin: bool(val(r, 'builtin')),
+    visuals: normReportVisuals(val(r, 'visuals')),
+  };
+}
+
+/** GET /api/reports/templates：items 兼容被包在 {items} / {data} 里。 */
+export function normReportTemplates(raw: unknown): ReportTemplatesPayload {
+  const r = rec(raw);
+  return {
+    items: list(val(r, 'items')).map(normReportTemplate),
+    dataDir: str(val(r, 'dataDir', 'data_dir')),
+  };
+}
+
+/** GET /api/reports/templates/preview：html 缺失时按空串处理，由页面展示空态。 */
+export function normReportTemplatePreview(raw: unknown): ReportTemplatePreview {
+  const r = rec(raw);
+  const name = str(val(r, 'name'));
+  return {
+    name,
+    label: str(val(r, 'label'), name),
+    description: str(val(r, 'description')),
+    builtin: bool(val(r, 'builtin')),
+    width: Math.max(200, num(val(r, 'width'), 1200)),
+    visuals: normReportVisuals(val(r, 'visuals')),
+    mood: normReportMood(val(r, 'mood')),
+    day: str(val(r, 'day')),
+    html: str(val(r, 'html')),
+  };
+}
+
+/** POST /api/reports/templates/install：installed 结果自带 builtin=false。 */
+export function normReportTemplateInstall(raw: unknown): ReportTemplateInstallResult {
+  const r = rec(raw);
+  return {
+    ok: bool(val(r, 'ok'), true),
+    name: str(val(r, 'name')),
+    label: str(val(r, 'label')),
+    description: str(val(r, 'description')),
+    builtin: false,
+    files: num(val(r, 'files')),
+    bytes: num(val(r, 'bytes')),
   };
 }

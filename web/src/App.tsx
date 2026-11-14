@@ -17,7 +17,7 @@ import { ModelsPage } from './pages/ModelsPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { PersonasPage } from './pages/PersonasPage';
 import { ProfilesPage } from './pages/ProfilesPage';
-import { SettingsPage } from './pages/SettingsPage';
+import { ReportsPage } from './pages/ReportsPage';
 import { StickersPage } from './pages/StickersPage';
 import { ToolsPage } from './pages/ToolsPage';
 import { navigate, routeOf, useRoutePath } from './router';
@@ -50,14 +50,22 @@ function NotFound({ path }: { path: string }) {
   );
 }
 
+/** 旧路由兼容：/settings 已拆解，进页面后重定向。 */
+function Redirect({ to }: { to: string }) {
+  useEffect(() => { navigate(to, { replace: true }); }, [to]);
+  return null;
+}
+
 function renderRoute(path: string) {
   switch (path) {
     case '/overview': return <OverviewPage />;
     case '/bots': return <BotsPage />;
     case '/profiles': return <ProfilesPage />;
     case '/models': return <ModelsPage />;
-    case '/settings': return <SettingsPage />;
+    // 旧「设置」页已拆掉：全局项进模型页语音 tab，机器人项进机器人详情，其余归配置档页。
+    case '/settings': return <Redirect to="/profiles" />;
     case '/tools': return <ToolsPage />;
+    case '/reports': return <ReportsPage />;
     case '/knowledge': return <KnowledgePage />;
     case '/memory': return <MemoryPage />;
     case '/members': return <MembersPage />;

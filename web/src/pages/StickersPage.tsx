@@ -4,7 +4,7 @@
  * 数据源：GET/POST /api/stickers、GET /api/stickers/quota、DELETE /api/stickers/:id?bot=。
  * 当前是 JSON 注册已有文件（非 multipart 上传）：file 是路径字符串，删除时会尝试删除该文件。
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { api, toApiError } from '../api/client';
 import type { Sticker } from '../api/types';
@@ -20,6 +20,31 @@ import { navigate } from '../router';
 import { useApp } from '../state/AppContext';
 import { useApi } from '../state/useApi';
 
+/** 表情包缩略图：文件缺失时降级成占位块，不让整页报错。 */
+function StickerThumb({ botId, sticker, size, onOpen }: {
+  botId: string;
+  sticker: Sticker;
+  size: 'sm' | 'lg';
+  onOpen?: () => void;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return <span className={'sticker-thumb-empty sticker-thumb-' + size}>无预览</span>;
+  }
+  return (
+    <img
+      className={'sticker-thumb-img sticker-thumb-' + size}
+      src={api.stickerFileUrl(botId, sticker.id)}
+      alt={sticker.name}
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+      onClick={onOpen}
+      title={sticker.file}
+    />
+  );
+}
+
 export function StickersPage() {
   const { botId, bots, bot, notify } = useApp();
   const stickers = useApi((signal) => (botId ? api.listStickers(botId, {}, signal) : Promise.resolve([])), [botId]);
@@ -32,6 +57,18 @@ export function StickersPage() {
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Sticker | null>(null);
   const [deleting, setDeleting] = useState(false);
+  /** 视图：画廊（默认，能直接看表情）/ 表格（路径/hash 等元数据）。 */
+  const [view, setView] = useState<'gallery' | 'table'>('gallery');
+  /** 大图预览。 */
+  const [preview, setPreview] = useState<Sticker | null>(null);
+
+  // Esc 关闭大图
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setPreview(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [preview]);
 
   const emotions = useMemo(() => {
     const set = new Set<string>();
@@ -98,6 +135,16 @@ export function StickersPage() {
   };
 
   const columns: Array<Column<Sticker>> = [
+    {
+      key: 'thumb',
+      title: '',
+      width: '56px',
+      render: (sticker) => (
+        <div className="sticker-thumb-cell">
+          <StickerThumb botId={botId} sticker={sticker} size="sm" onOpen={() => setPreview(sticker)} />
+        </div>
+      ),
+    },
     {
       key: 'name',
       title: '表情',
@@ -192,8 +239,8 @@ export function StickersPage() {
       </div>
 
       <div className="hint-strip">
-        <span className="hint-label">路径登记</span>
-        <span className="hint-text">当前接口登记已有文件（不是上传）：file 传相对/绝对路径，删除时会尽力删除该文件；上传能力后续里程碑再加。</span>
+        <span className="hint-label">预览</span>
+        <span className="hint-text">表情包图由控制台直接读取登记的文件（GET /api/stickers/:id/file）：点缩略图看大图；文件被移动/清理后会显示「无预览」，不影响其它记录。</span>
       </div>
 
       <section className="panel">
@@ -203,6 +250,22 @@ export function StickersPage() {
             <p className="panel-desc">共 {stickers.data?.length ?? 0} 个；最近收藏优先。</p>
           </div>
           <div className="panel-tools">
+            <div className="segmented" role="group" aria-label="视图">
+              <button
+                type="button"
+                className={'seg-btn' + (view === 'gallery' ? ' active' : '')}
+                onClick={() => setView('gallery')}
+              >
+                画廊
+              </button>
+              <button
+                type="button"
+                className={'seg-btn' + (view === 'table' ? ' active' : '')}
+                onClick={() => setView('table')}
+              >
+                表格
+              </button>
+            </div>
             <select className="input select-compact" value={emotion} onChange={(event) => setEmotion(event.target.value)} aria-label="按 emotion 过滤">
               <option value="">全部 emotion</option>
               {emotions.map((item) => <option key={item} value={item}>{item}</option>)}
@@ -223,6 +286,41 @@ export function StickersPage() {
         <div className="panel-body flush">
           {stickers.error && !stickers.error.unimplemented && !stickers.data ? (
             <div className="panel-pad"><ErrorNote error={stickers.error} onRetry={stickers.reload} /></div>
+          ) : view === 'gallery' ? (
+            rows.length === 0 ? (
+              <div className="panel-pad">
+                <EmptyState
+                  title={filter || emotion ? '没有匹配的表情包' : '表情包库还是空的'}
+                  description={filter || emotion ? '换个筛选条件试试。' : '入站表情会自动收藏（可配置），也可以手动登记已有文件。'}
+                  action={filter || emotion
+                    ? <button type="button" className="btn btn-sm" onClick={() => { setFilter(''); setEmotion(''); }}>清空筛选</button>
+                    : <button type="button" className="btn btn-primary btn-sm" onClick={openCreate}>登记表情包</button>}
+                />
+              </div>
+            ) : (
+              <div className="sticker-grid">
+                {rows.map((sticker) => (
+                  <div className="sticker-card" key={sticker.id}>
+                    <button
+                      type="button"
+                      className="sticker-card-thumb"
+                      onClick={() => setPreview(sticker)}
+                      title={'查看大图：' + sticker.name}
+                    >
+                      <StickerThumb botId={botId} sticker={sticker} size="lg" />
+                    </button>
+                    <div className="sticker-card-meta">
+                      <span className="sticker-card-name" title={sticker.name}>{sticker.name}</span>
+                      {sticker.emotion ? <span className="tag">{sticker.emotion}</span> : null}
+                    </div>
+                    <div className="sticker-card-foot">
+                      <span className="mono muted">{fmtTimeSmart(sticker.createdAt)}</span>
+                      <button type="button" className="btn btn-sm btn-danger-text" onClick={() => setDeleteTarget(sticker)}>删除</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
           ) : (
             <DataTable
               columns={columns}
@@ -297,6 +395,24 @@ export function StickersPage() {
           {formError ? <p className="field-error" role="alert">{formError}</p> : null}
         </div>
       </Drawer>
+
+      {preview ? (
+        <div className="sticker-lightbox" role="dialog" aria-modal="true" aria-label={'表情包大图：' + preview.name} onClick={() => setPreview(null)}>
+          <div className="sticker-lightbox-inner" onClick={(event) => event.stopPropagation()}>
+            <div className="sticker-lightbox-head">
+              <span className="sticker-lightbox-title">{preview.name}</span>
+              {preview.emotion ? <span className="tag">{preview.emotion}</span> : null}
+              <button type="button" className="btn btn-sm btn-ghost sticker-lightbox-close" onClick={() => setPreview(null)}>
+                关闭
+              </button>
+            </div>
+            <div className="sticker-lightbox-body">
+              <StickerThumb botId={botId} sticker={preview} size="lg" />
+            </div>
+            <div className="sticker-lightbox-foot mono" title={preview.file}>{preview.file}</div>
+          </div>
+        </div>
+      ) : null}
 
       <ConfirmDialog
         open={deleteTarget !== null}

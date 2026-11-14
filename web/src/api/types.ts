@@ -100,12 +100,22 @@ export interface StateSnapshot {
   dshWeb?: DshWebInfo | null;
 }
 
+/** 设置项 UI 分组（GET /api/schema 的 groups；配置档编辑器的一级 tab）。 */
+export interface SchemaGroup {
+  id: string;
+  label: string;
+  order?: number;
+  desc?: string;
+}
+
 /** 设置项 UI 元数据（GET /api/schema）。 */
 export interface SchemaSection {
   id: string;
   label: string;
   order?: number;
   desc?: string;
+  /** 所属 UI 组 id（对应 groups）；缺省时按 section 自身单独成组。 */
+  group?: string;
 }
 
 export interface SchemaItem {
@@ -127,6 +137,8 @@ export interface SchemaItem {
 }
 
 export interface SchemaPayload {
+  /** 一级分组（可选：旧后端只给 sections 时前端回退为每 section 一组）。 */
+  groups?: SchemaGroup[];
   sections: SchemaSection[];
   items: SchemaItem[];
 }
@@ -136,6 +148,8 @@ export interface SettingsPayload {
   values: Record<string, unknown>;
 }
 
+export type ToolTier = 'active' | 'passive';
+
 export interface ToolItem {
   name: string;
   source?: string;
@@ -143,6 +157,23 @@ export interface ToolItem {
   restrictable?: boolean;
   enabled?: boolean;
   visible?: boolean;
+  capability?: string | null;
+  /** 当前 profile 生效档位：active=常驻声明，passive=按需点亮 */
+  tier?: ToolTier | '';
+  /** 被动能力的激活分组（imagegen/voice/workspace…），没有则为 null */
+  group?: string | null;
+  /** 是否在 catalog 里登记过档位；false = 未分类（默认按常驻） */
+  classified?: boolean;
+  /** 装配状态：declared=已声明（进 schema）/ indexed=索引中 / disabled=不可用 / unknown=没配置档 */
+  state?: ToolState;
+  /** 已装载：插件在 agent 启动时注册，可被调用或激活。 */
+  loaded?: boolean | null;
+  /** 已声明：出现在每次请求的 tools schema 里。 */
+  declared?: boolean | null;
+  /** 索引中：只出现在提示词【按需能力】索引里，装载后下一步才进 schema。 */
+  indexed?: boolean | null;
+  /** 不可用/未声明的原因（tooltip 用）。 */
+  reason?: string;
 }
 
 export interface ToolPolicy {
@@ -150,12 +181,49 @@ export interface ToolPolicy {
   allow: string[];
   deny: string[];
   extra: string[];
+  /** 档位覆盖：工具名或能力组 → active/passive（缺省用内置分档） */
+  tiers?: Record<string, ToolTier>;
+}
+
+export interface ToolGroup {
+  id: string;
+  label: string;
+  capability: string | null;
+  tools: string[];
+}
+
+export type ToolState = 'declared' | 'indexed' | 'disabled' | 'unknown';
+
+/** 三态计数（工具页顶部摘要）。 */
+export interface ToolStateSummary {
+  declared: number;
+  indexed: number;
+  disabled: number;
+  unknown: number;
+}
+
+/** 该配置档应使用的 agent preset（装配期决定常驻工具集）。 */
+export interface ToolsPresetInfo {
+  id: string;
+  modules: string[];
+}
+
+/** 策略里引用、但发现清单里已经不存在的条目（失效条目）。 */
+export interface StalePolicyEntry {
+  name: string;
+  where: 'allow' | 'deny' | 'tiers';
 }
 
 export interface ToolsPayload {
   items: ToolItem[];
   policy: ToolPolicy;
   visible: string[];
+  groups?: ToolGroup[];
+  groupState?: ToolGroup[];
+  stateSummary?: ToolStateSummary;
+  /** 策略里失效的条目（指向已不存在的工具/分组）。 */
+  stale?: { policy: StalePolicyEntry[] };
+  preset?: ToolsPresetInfo | null;
   note?: string;
 }
 
@@ -283,6 +351,30 @@ export interface StickerQuota {
   count: number;
 }
 
+/** 会话诊断（GET /api/tools/sessions?bot=…）。 */
+export interface ToolSession {
+  peer: string;
+  sessionId: string;
+  /** 本轮点亮的能力组 */
+  groups: string[];
+  /** 本轮点名点亮的工具 */
+  tools: string[];
+  /** 本次 assembly 真正声明的工具 */
+  declared: string[];
+  /** 其中属于「按需」档、因激活而出现的工具 */
+  passiveDeclared: string[];
+  /** 系统提示词字符数 */
+  promptChars: number;
+  sections?: number;
+  error?: string;
+}
+
+export interface ToolSessionsPayload {
+  items: ToolSession[];
+  count: number;
+  note?: string;
+}
+
 export interface AuditEntry {
   id: number;
   at: number;
@@ -309,11 +401,26 @@ export interface PromptSection {
   chars: number;
   /** 后端标记的空段（例如 query 为空时的 memory/knowledge）。 */
   empty?: boolean;
+  /** live 预览：ours=本插件段，host=宿主段（空文本即被遮蔽）。 */
+  kind?: 'ours' | 'host';
+  /** live 预览：段在 assembly 里的实际顺序。 */
+  order?: number;
+}
+
+export interface PromptTool {
+  name: string;
+  tier?: ToolTier | '';
+}
+
+export interface PromptActivation {
+  groups: string[];
+  tools: string[];
 }
 
 /**
  * GET /api/preview/prompt 响应。
- * 只包含本插件注册的 prompt 段；宿主段（身份/工具 schema）由 dsh 在运行时追加，不在此处。
+ * source=live 时是真实 assembly（含宿主段/遮蔽结果/本次声明的工具）；
+ * source=composed 时只包含本插件注册的段（模拟拼合）。
  */
 export interface PromptPreview {
   ok: boolean;
@@ -323,6 +430,25 @@ export interface PromptPreview {
   notes: string[];
   toolNames: string[];
   skillNames: string[];
+  /** 渲染后字符数（live 预览）。 */
+  chars?: number;
+  /** live 预览：本次真正声明的工具（被动未激活的不在内）。 */
+  tools?: PromptTool[];
+  /** 运行时上下文快照（user 角色）：记忆/知识/群友/时间，不进系统提示词前缀。 */
+  contextSections?: PromptSection[];
+  /** 运行时上下文拼合全文（供复制）。 */
+  contextText?: string;
+  contexts?: string[];
+  variables?: string[];
+  activation?: PromptActivation;
+  /** 该 live 会话绑定的 agent preset（装配期决定的工具集）。 */
+  presetId?: string;
+  /** 按当前配置档应该使用的 preset；与 presetId 不同说明配置改了但会话没重建。 */
+  expectedPresetId?: string;
+  /** presetId ≠ expectedPresetId：新配置要在新会话（/new 或重建）才生效。 */
+  presetStale?: boolean;
+  /** 有会话但实时预览不可用时的原因（no-session / no-service / assemble-failed…）。 */
+  liveUnavailable?: string | null;
 }
 
 export interface PromptPreviewInput {
@@ -384,7 +510,7 @@ export interface TtsOptionItem {
   label: string;
 }
 
-export type TtsFieldType = 'text' | 'textarea' | 'select' | 'number' | 'json';
+export type TtsFieldType = 'text' | 'textarea' | 'select' | 'number' | 'json' | 'audio';
 
 /** TTS kind 的表单字段元数据（控制台抽屉按 type 通用渲染）。 */
 export interface TtsField {
@@ -402,6 +528,8 @@ export interface TtsField {
   max?: number;
   step?: number;
   maxLength?: number;
+  /** audio 字段允许的扩展名（文件选择器过滤用）。 */
+  accept?: string[];
 }
 
 /** TTS 供应商种类元数据（GET /api/models/tts/kinds）。 */
@@ -409,7 +537,15 @@ export interface TtsKind {
   id: string;
   label: string;
   short: string;
+  /** 分组：default（默认音色）/ clone（克隆）/ design（文字设计）。 */
+  group: string;
+  groupLabel: string;
+  /** 供应商能力：tts（合成）/ asr（语音识别，复用同一供应商表）。 */
+  capability?: 'tts' | 'asr';
   desc: string;
+  /** 需要「生成音色」动作的类型（MiniMax 克隆/设计）的按钮文案。 */
+  prepareLabel?: string;
+  prepareHint?: string;
   needsSecret: boolean;
   secretLabel: string;
   secretPlaceholder: string;
@@ -430,6 +566,11 @@ export interface TtsProvider {
   kind: string;
   kindLabel: string;
   kindShort: string;
+  /** 分组：default / clone / design（由后端按 kind 推导）。 */
+  group: string;
+  groupLabel: string;
+  /** 供应商能力：tts（合成）/ asr（语音识别）。 */
+  capability?: 'tts' | 'asr';
   enabled: boolean;
   config: Record<string, unknown>;
   hasSecret: boolean;
@@ -449,10 +590,59 @@ export interface TtsProviderInput {
   secret?: string;
 }
 
+/** TTS 供应商分组元数据（控制台按组拆成三个区块）。 */
+export interface TtsGroup {
+  id: string;
+  label: string;
+  order: number;
+  desc: string;
+}
+
+/** GET /api/models/tts/kinds。 */
+export interface TtsKindsPayload {
+  kinds: TtsKind[];
+  groups: TtsGroup[];
+}
+
+/** 克隆样本文件选择器根目录。 */
+export interface TtsAudioRoot {
+  id: string;
+  label: string;
+  path: string;
+}
+
+/** 克隆样本文件选择器条目（目录或音频文件）。 */
+export interface TtsAudioEntry {
+  name: string;
+  path: string;
+  type: 'dir' | 'file';
+  ext?: string;
+  size?: number;
+}
+
+/** GET /api/models/tts/audio/list。 */
+export interface TtsAudioList {
+  path: string;
+  parent: string | null;
+  roots: TtsAudioRoot[];
+  entries: TtsAudioEntry[];
+  truncated: boolean;
+}
+
 /** GET /api/models/tts/providers。 */
 export interface TtsProviderList {
   providers: TtsProvider[];
   defaultProvider: string;
+}
+
+/** POST /api/models/tts/providers/:id/prepare 的生成音色结果（MiniMax 克隆/设计）。 */
+export interface TtsPrepareResult {
+  ok: boolean;
+  provider: TtsProvider;
+  voiceId: string;
+  demoAudioBase64?: string;
+  demoMimeType?: string;
+  demoBytes?: number;
 }
 
 /** POST /api/models/tts/providers/:id/test 的试听结果。 */
@@ -469,5 +659,76 @@ export interface TtsTestResult {
   audioBase64?: string;
   mimeType?: string;
   tooLarge?: boolean;
+}
+
+// ── 群日报卡片模板（ReportsPage；接口契约见 .work/ui-adaptation/contract.md §3）──
+
+/** 模板预览的示例氛围：热闹 / 平静 / 深夜（只影响带插画的模板）。 */
+/** 模板声明的氛围 id（由模板 meta.json 的 visuals 决定，后端不写死取值）。 */
+export type ReportTemplateMood = string;
+
+/** 模板声明的插画槽（精简视图；素材清单在后端，页面只需要氛围切换）。 */
+export interface ReportTemplateVisuals {
+  slots: string[];
+  moods: Array<{ id: string; label: string }>;
+  defaultMood: string;
+}
+
+/** 卡片模板（GET /api/reports/templates 的 items 项；内置 + 数据目录自定义）。 */
+export interface ReportTemplate {
+  name: string;
+  label: string;
+  description: string;
+  builtin: boolean;
+  /** 模板 meta.json 里的 visuals 声明；没有插画槽的模板为 null。 */
+  visuals?: ReportTemplateVisuals | null;
+}
+
+/** GET /api/reports/templates。 */
+export interface ReportTemplatesPayload {
+  items: ReportTemplate[];
+  /** <dataDir>/templates 的父目录（未装配数据目录时为空串）。 */
+  dataDir: string;
+}
+
+/** GET /api/reports/templates/preview：用示例数据渲染出的自包含 HTML。 */
+export interface ReportTemplatePreview {
+  name: string;
+  label: string;
+  description: string;
+  builtin: boolean;
+  /** iframe 建议逻辑宽度（卡片最宽 1080 + body padding）。 */
+  width: number;
+  /** 模板声明的插画槽；没有插画槽的模板为 null。 */
+  visuals?: ReportTemplateVisuals | null;
+  mood: ReportTemplateMood;
+  day: string;
+  html: string;
+}
+
+/** 安装模板的一个文件；content 是 base64。 */
+export interface ReportTemplateFile {
+  path: string;
+  content: string;
+}
+
+/** POST /api/reports/templates/install 入参。 */
+export interface ReportTemplateInstallInput {
+  name: string;
+  label?: string;
+  description?: string;
+  files: ReportTemplateFile[];
+  replace?: boolean;
+}
+
+/** POST /api/reports/templates/install 返回（label/description 为写完后回读的结果）。 */
+export interface ReportTemplateInstallResult {
+  ok: boolean;
+  name: string;
+  label: string;
+  description: string;
+  builtin: false;
+  files: number;
+  bytes: number;
 }
 

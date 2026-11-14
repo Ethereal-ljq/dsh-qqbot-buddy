@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>群日报 · journal</title>
+__FONTS_CSS__
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #ddd6c8; }
+  body { display: flex; justify-content: center; padding: 32px; }
+  .card {
+    width: 1080px;
+    background: #F7F2E7;
+    color: #211C16;
+    padding: 58px 70px 46px;
+    position: relative;
+    font-family: 'WenKai', 'Noto Serif CJK SC', 'Songti SC', serif;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/><feColorMatrix type='saturate' values='0'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='0.045'/></svg>");
+  }
+  .top { display: flex; justify-content: space-between; align-items: flex-end; }
+  .kicker { font-family: 'Grotesk', 'Noto Sans CJK SC', sans-serif; font-size: 13px; letter-spacing: .28em; color: #9A6B4F; text-transform: uppercase; }
+  .date { font-family: 'JBMono', monospace; font-size: 13px; letter-spacing: .12em; color: #7C7264; }
+  .mast { margin-top: 14px; display: flex; align-items: baseline; justify-content: space-between; border-top: 2px solid #211C16; padding-top: 12px; }
+  .brand { font-family: 'Grotesk', 'Noto Sans CJK SC', sans-serif; font-weight: 700; font-size: 26px; letter-spacing: .22em; }
+  .issue { font-family: 'JBMono', monospace; font-size: 12px; color: #8B8173; letter-spacing: .1em; }
+
+  h1 { margin: 30px 0 0; font-size: 66px; line-height: 1.16; font-weight: 700; letter-spacing: .01em; }
+  .lead { margin: 18px 0 0; font-size: 24px; line-height: 1.85; color: #4A4136; max-width: 840px; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin: 34px 0 0; border-top: 1px solid #D8CDBB; border-bottom: 1px solid #D8CDBB; }
+  .stat { padding: 16px 0 14px; }
+  .stat + .stat { border-left: 1px solid #E3D9C8; padding-left: 24px; }
+  .stat .num { font-family: 'Grotesk', 'Noto Sans CJK SC', sans-serif; font-weight: 700; font-size: 40px; line-height: 1; letter-spacing: .01em; }
+  .stat .num small { font-size: 16px; font-weight: 500; margin-left: 4px; color: #7C7264; }
+  .stat .lab { margin-top: 8px; font-family: 'Noto Sans CJK SC', sans-serif; font-size: 13px; letter-spacing: .12em; color: #8B8173; }
+
+  .section { margin-top: 34px; }
+  .sec-head { display: flex; align-items: center; gap: 14px; }
+  .sec-head .cn { font-size: 22px; font-weight: 700; letter-spacing: .08em; }
+  .sec-head .en { font-family: 'Grotesk', sans-serif; font-size: 11px; letter-spacing: .24em; color: #A79A86; text-transform: uppercase; }
+  .sec-head .rule { flex: 1; height: 1px; background: #D8CDBB; }
+
+  .topic { margin-top: 20px; padding-left: 22px; position: relative; }
+  .topic:before { content: attr(data-i); position: absolute; left: 0; top: 2px; font-family: 'Grotesk', sans-serif; font-size: 15px; font-weight: 700; color: #B4472E; }
+  .topic h3 { margin: 0; font-size: 26px; line-height: 1.45; font-weight: 700; }
+  .topic p { margin: 7px 0 0; font-size: 19px; line-height: 1.8; color: #4A4136; }
+  .quote-line { margin-top: 8px; font-size: 18px; line-height: 1.75; color: #6B5E4D; }
+  .quote-line .q { color: #B4472E; }
+  .quote-line .who { font-family: 'Noto Sans CJK SC', sans-serif; font-size: 13px; color: #9A8B76; margin-left: 8px; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 26px 34px; margin-top: 18px; }
+  .qcard { border-left: 3px solid #B4472E; padding: 2px 0 2px 16px; }
+  .qcard .text { font-size: 20px; line-height: 1.75; }
+  .qcard .text:before { content: '「'; color: #B4472E; }
+  .qcard .text:after { content: '」'; color: #B4472E; }
+  .qcard .meta { margin-top: 7px; font-family: 'Noto Sans CJK SC', sans-serif; font-size: 13px; color: #8B8173; }
+  .qcard .why { margin-top: 6px; font-size: 15px; line-height: 1.7; color: #7C7264; }
+
+  .speakers { margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 40px; }
+  .sp { display: flex; align-items: baseline; gap: 10px; font-size: 17px; }
+  .sp .rank { font-family: 'Grotesk', sans-serif; font-size: 12px; color: #B4472E; width: 18px; }
+  .sp .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sp .bar { height: 4px; border-radius: 2px; background: #E3D6C2; position: relative; width: 140px; align-self: center; }
+  .sp .bar i { position: absolute; inset: 0 auto 0 0; background: #B4472E; border-radius: 2px; }
+  .sp .n { font-family: 'JBMono', monospace; font-size: 13px; color: #8B8173; width: 42px; text-align: right; }
+
+  .hours { display: flex; align-items: flex-end; gap: 4px; height: 54px; margin-top: 16px; }
+  .hour { flex: 1; background: #DCCFBB; border-radius: 2px 2px 0 0; min-height: 2px; position: relative; }
+  .hour.peak { background: #B4472E; }
+  .hours-lab { display: flex; justify-content: space-between; margin-top: 6px; font-family: 'JBMono', monospace; font-size: 10px; color: #A79A86; }
+
+  .footer { margin-top: 38px; padding-top: 14px; border-top: 1px solid #D8CDBB; display: flex; justify-content: space-between; align-items: center; font-family: 'Noto Sans CJK SC', sans-serif; font-size: 12px; color: #9A8B76; letter-spacing: .08em; }
+  .empty { font-size: 17px; color: #9A8B76; margin-top: 12px; }
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="top">
+    <div class="kicker">QQ Group · Daily Brief</div>
+    <div class="date" id="date"></div>
+  </div>
+  <div class="mast">
+    <div class="brand">群 日 报</div>
+    <div class="issue" id="issue"></div>
+  </div>
+
+  <h1 id="title"></h1>
+  <p class="lead" id="lead"></p>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="section" id="topics-sec">
+    <div class="sec-head"><span class="cn">今日话题</span><span class="en">Topics</span><span class="rule"></span></div>
+    <div id="topics"></div>
+  </div>
+
+  <div class="section" id="quotes-sec">
+    <div class="sec-head"><span class="cn">群聊金句</span><span class="en">Quotes</span><span class="rule"></span></div>
+    <div class="grid" id="quotes"></div>
+  </div>
+
+  <div class="section">
+    <div class="sec-head"><span class="cn">活跃榜</span><span class="en">Speakers</span><span class="rule"></span></div>
+    <div class="speakers" id="speakers"></div>
+  </div>
+
+  <div class="section">
+    <div class="sec-head"><span class="cn">全天节奏</span><span class="en">Hourly</span><span class="rule"></span></div>
+    <div class="hours" id="hours"></div>
+    <div class="hours-lab"><span>00</span><span>06</span><span>12</span><span>18</span><span>23</span></div>
+  </div>
+
+  <div class="footer">
+    <span id="foot-left">数据来自当日群聊流水 · 由鱼鱼自动整理</span>
+    <span id="foot-right"></span>
+  </div>
+</div>
+<script>
+(function () {
+  var d = window.__CARD_DATA__ || {};
+  var report = d.report || {};
+  var stats = d.stats || {};
+  function esc(v) {
+    return String(v === null || v === undefined ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function $(id) { return document.getElementById(id); }
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+  var day = d.day || '';
+  var dt = day ? new Date(day + 'T00:00:00') : new Date();
+  var week = ['周日','周一','周二','周三','周四','周五','周六'][dt.getDay()] || '';
+  $('date').textContent = day.replace(/-/g, ' . ') + '  ' + week;
+  $('issue').textContent = 'NO.' + (d.meta && d.meta.digest ? String(d.meta.digest).slice(0, 6).toUpperCase() : 'DAILY');
+
+  $('title').textContent = String(report.title || '今日群聊').replace(/^群聊?日报[：:·\s]+/, '');
+  $('lead').textContent = report.lead || '';
+
+  var top = (stats.topSpeakers || []).slice(0, 4);
+  var peak = 0, peakN = 0;
+  (stats.hours || []).forEach(function (n, i) { if (n > peakN) { peakN = n; peak = i; } });
+  var statsRows = [
+    { n: stats.total || 0, u: '条', l: '消息' },
+    { n: stats.speakers || 0, u: '人', l: '发言' },
+    { n: peak ? pad(peak) + ':00' : '—', u: '', l: '高峰时段', small: true },
+    { n: top[0] ? top[0].name : '—', u: '', l: '最活跃', small: true }
+  ];
+  $('stats').innerHTML = statsRows.map(function (s) {
+    return '<div class="stat"><div class="num' + (s.small ? ' small' : '') + '" style="' + (s.small ? 'font-size:26px;line-height:1.4;' : '') + '">'
+      + esc(s.n) + (s.u ? '<small>' + esc(s.u) + '</small>' : '') + '</div><div class="lab">' + esc(s.l) + '</div></div>';
+  }).join('');
+
+  var topics = Array.isArray(report.topics) ? report.topics : [];
+  if (topics.length === 0) {
+    $('topics-sec').style.display = 'none';
+  } else {
+    $('topics').innerHTML = topics.map(function (t, i) {
+      var qs = (t.quotes || []).map(function (q) {
+        return '<div class="quote-line"><span class="q">「</span>' + esc(q.text) + '<span class="q">」</span><span class="who">— ' + esc(q.name || '有人') + '</span></div>';
+      }).join('');
+      return '<div class="topic" data-i="' + pad(i + 1) + '"><h3>' + esc(t.title) + '</h3>'
+        + (t.summary ? '<p>' + esc(t.summary) + '</p>' : '') + qs + '</div>';
+    }).join('');
+  }
+
+  var quotes = Array.isArray(report.quotes) ? report.quotes : [];
+  if (quotes.length === 0) {
+    $('quotes-sec').style.display = 'none';
+  } else {
+    $('quotes').innerHTML = quotes.slice(0, 6).map(function (q) {
+      return '<div class="qcard"><div class="text">' + esc(q.text) + '</div>'
+        + '<div class="meta">— ' + esc(q.name || '有人') + '</div>'
+        + (q.why ? '<div class="why">' + esc(q.why) + '</div>' : '') + '</div>';
+    }).join('');
+  }
+
+  var speakers = (stats.topSpeakers || []).slice(0, 8);
+  var max = speakers.length ? speakers[0].count : 1;
+  $('speakers').innerHTML = speakers.map(function (s, i) {
+    var w = Math.max(4, Math.round((s.count / max) * 100));
+    return '<div class="sp"><span class="rank">' + pad(i + 1) + '</span><span class="name">' + esc(s.name) + '</span>'
+      + '<span class="bar"><i style="width:' + w + '%"></i></span><span class="n">' + s.count + '</span></div>';
+  }).join('');
+
+  var hours = Array.isArray(stats.hours) && stats.hours.length === 24 ? stats.hours : new Array(24).fill(0);
+  var hmax = Math.max.apply(null, hours.concat([1]));
+  $('hours').innerHTML = hours.map(function (n, i) {
+    var h = Math.max(2, Math.round((n / hmax) * 54));
+    var cls = i === peak ? 'hour peak' : 'hour';
+    return '<div class="' + cls + '" style="height:' + h + 'px" title="' + i + ':00 · ' + n + '"></div>';
+  }).join('');
+
+  var now = new Date();
+  $('foot-right').textContent = '第 ' + (d.day || '') + ' 期 · 生成于 ' + pad(now.getHours()) + ':' + pad(now.getMinutes());
+  window.__CARD_READY__ = true;
+})();
+</script>
+</body>
+</html>

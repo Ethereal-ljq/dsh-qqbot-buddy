@@ -1,7 +1,7 @@
 # 模型中心（LLM / 视觉 / 语音 TTS / 插槽）设计与实现契约
 
 > 状态：已实现并通过独立验收（2026-11；本文件同时是多人协作的接口契约，实现完成后作为功能设计文档保留）。
-> 关联设置：`lib/core/config/schema.js` 的 model / vision / voice 分节；数据表 `tts_providers`（migration v6）。
+> 关联设置：`lib/core/config/schema.js` 的 model / vision / voice 分节；数据表 `tts_providers`（migration v6，v7 拆分 MiMo 三类能力）。
 
 ## 1. 目标
 
@@ -12,7 +12,17 @@
    - `更多类型`：模型类型插槽（图像生成 / ASR / 向量检索…，预留扩展点）
 2. TTS 支持多种供应商：
    - `edge` 微软 Edge 语音（免 Key，内置 WebSocket 实现）
-   - `mimo` 小米 MiMo-V2.5-TTS（内置音色 / voicedesign / voiceclone）
+   - `mimo` 小米 MiMo-V2.5-TTS 默认音色
+   - `mimo-clone` 小米 MiMo 音色克隆（选本机音频样本）
+   - `mimo-design` 小米 MiMo 文字设计音色（自然语言描述声音）
+   - `minimax` MiniMax 语音（T2A 默认音色）
+   - `minimax-clone` MiniMax 音色克隆（上传样本 → voice_clone → voiceId）
+   - `minimax-design` MiniMax 文字设计音色（voice_design → voiceId + 试听）
+   - `deepseek` DeepSeek 官方 TTS（/v1/tools/tts：stella / tide，wav/pcm）
+   - `deepseek-asr` DeepSeek 官方 ASR（/v1/tools/asr；capability=asr，不参与 TTS 合成，供入站语音转写）
+   - `mimo-asr` 小米 MiMo-V2.5-ASR（OpenAI 兼容 chat/completions，input_audio）
+   - `openai-asr` OpenAI 兼容 /audio/transcriptions（Whisper / Groq / 本地 whisper server）
+   - `faster-whisper` 本地 faster-whisper（Python venv + CTranslate2，离线）
    - `bailian` 阿里云百炼 Qwen-TTS（qwen3-tts-flash / qwen-tts）
    - `openai` OpenAI 兼容 `/audio/speech`
    - `custom` 自定义 HTTP 接口（URL/Header/Body 模板 + 三种响应类型）
@@ -22,7 +32,8 @@
 
 ## 2. 配置层级
 
-- **全局**：TTS 供应商列表（表 `tts_providers`）+ `voice.defaultProvider`（global scope 设置项）。
+- **全局**：TTS 供应商列表（表 `tts_providers`）+ `voice.defaultProvider`（global scope 设置项，
+  在「语音（TTS）」tab 顶部的「默认 TTS 供应商（全局）」下拉里直接选，写 global 层）。
 - **配置档**：`voice.*`（是否启用、选哪个供应商、音色/风格/语速/字数上限）与 `vision.*`、`model.*`。
 - 生效顺序沿用既有层级：defaults → global → bot → profile（binding 匹配后的配置档）。
 
@@ -72,21 +83,27 @@ CREATE TABLE tts_providers (
 ```js
 {
   id, label, short, desc,
+  group: 'default'|'clone'|'design', // 控制台语音页按组拆成独立区块
+  fixedModel?: string,    // 模型由 kind 固定时填（MiMo 三类），不再暴露 model 字段
+  prepareLabel?: string,  // 需要「生成音色」动作的类型（MiniMax 克隆/设计）的按钮文案
+  prepareHint?: string,   // 动作说明（控制台卡片/抽屉提示）
   needsSecret, secretLabel, secretPlaceholder, secretHelp,
   defaultConfig,          // 新建预填，同时是配置默认值
   models: [{value,label}],// select 字段 optionsFrom:'models'
   voices: [{value,label}],// select 字段 optionsFrom:'voices'
-  fields: [{ key,label,type:'text'|'textarea'|'select'|'number'|'json',
+  fields: [{ key,label,type:'text'|'textarea'|'select'|'number'|'json'|'audio',
              options?/optionsFrom?:'models'|'voices', required?, placeholder?, help?,
-             min?, max?, step?, maxLength? }],
+             min?, max?, step?, maxLength?, accept? }],
   outputFormat: 'mp3' | 'wav',
   maxCharsPerRequest: number,
   timeoutMs: number,
 }
 ```
 
-已导出：`TTS_KINDS`、`TTS_KIND_LIST`、`kindOf`、`publicKinds()`、`defaultConfigFor`、
-`normalizeProviderInput(input,{existing})`、`providerView(row)`、`fieldOptions`。
+已导出：`TTS_KINDS`、`TTS_KIND_LIST`、`TTS_GROUPS`、`kindOf`、`groupOf`、`publicKinds()`、
+`defaultConfigFor`、`normalizeProviderInput(input,{existing})`、`providerView(row)`、`fieldOptions`。
+`TTS_GROUPS` 声明三组：`default`（默认音色 TTS）/ `clone`（音色克隆）/ `design`（文字设计音色），
+控制台「语音」tab 按组渲染独立区块；type=`audio` 字段由控制台渲染成「只读路径 + 选择音频」文件选择器。
 **供应商实现只允许用这些导出，不要在别处重复声明 kind。**
 
 ## 5. Provider store（`lib/core/tts/store.js`，已实现）
@@ -174,12 +191,14 @@ export default {
 | --- | --- | --- |
 | GET | `/api/models/slots` | `{ slots, ready, planned }` ← `core/model-slots.js slotsPayload()` |
 | GET | `/api/models/llm` | `{ providers:[{id,name}], models:[{provider,id,name,description?,inputModalities?}], warning? }`；从 `deps.rootCtx.get('llm')` 尽力读取，失败返回空 + warning |
-| GET | `/api/models/tts/kinds` | `{ kinds: publicKinds() }` |
+| GET | `/api/models/tts/kinds` | `{ kinds: publicKinds(), groups: TTS_GROUPS }` |
+| GET | `/api/models/tts/audio/list?path=` | 克隆样本文件选择器：列目录（仅子目录 + 音频文件），根目录限定为工作区 / 数据目录 / 用户主目录；返回 `{path, parent, roots, entries, truncated}` |
 | GET | `/api/models/tts/providers` | `{ providers: providerView[], defaultProvider }`（defaultProvider 读 global 设置） |
 | POST | `/api/models/tts/providers` | body `{name,kind,enabled?,config?,secret?}` → providerView |
 | PATCH | `/api/models/tts/providers/:id` | 同上；secret 空串=保留 |
 | DELETE | `/api/models/tts/providers/:id` | `{ok:true,id}` |
 | POST | `/api/models/tts/providers/:id/test` | body `{text?}`（默认「你好，这是一条语音合成测试。」）→ `{ok, providerId, kind, model, voice, format, bytes, ms, audioBase64, mimeType}`；audioBase64 超 4MB 时省略并返回 `tooLarge:true` |
+| POST | `/api/models/tts/providers/:id/prepare` | 生成音色（仅 MiniMax 克隆/设计）：上传样本或调用 voice_design → `{ok, provider, voiceId, demoAudioBase64?, demoMimeType?, demoBytes?}`，voiceId 自动写回 config；不支持的 kind → 400 |
 
 注册进 `lib/console/api/index.js`。依赖：`deps.tts`（engine，可为 null → 501）、`deps.config`、`deps.rootCtx`。
 `lib/index.js` 装配：`runtime.tts = createTtsEngine({ db, dataDir, logger })`，并放入 `consoleDeps.tts`。
@@ -220,9 +239,12 @@ export function createVoiceTools({ tts, manager, mediaSender, getSettings, confi
 - LLM tab：`SchemaForm sectionId="model"`（带动态 provider/model 下拉）+ 保存栏 + 说明卡「供应商由宿主管控」。
 - 视觉 tab：`SchemaForm sectionId="vision"` + 两种模式的说明卡（跟随 LLM / 独立模型）+ 保存栏。
 - 语音 tab：
-  - 配置面板（全局）：「TTS 供应商」卡片列表（名称/kind/模型/音色/hasSecret/启用状态）+ 新增/编辑/删除/试听；
-    表单由 `GET /api/models/tts/kinds` 的 `fields` 通用渲染（Drawer），secret 字段单独输入且留空=保留；
-    试听调 `POST .../test`，用返回 base64 播放 `<audio>` 并显示 bytes/ms。
+  - 配置面板（全局）：TTS 供应商按 **默认音色 / 音色克隆 / 文字设计** 三组拆成独立区块（组元数据来自
+    `GET /api/models/tts/kinds` 的 groups），每组卡片列表（名称/kind/摘要/hasSecret/启用状态）+ 新增/编辑/删除/试听；
+    表单由 kinds 的 `fields` 通用渲染（Drawer），secret 字段单独输入且留空=保留；
+    克隆样本字段为 `type:'audio'`：只读路径 + 「选择音频」文件选择器（`GET /api/models/tts/audio/list`，不允许手输路径）；
+    MiniMax 克隆/设计卡片在 `prepareLabel` 存在时显示「克隆音色 / 生成设计音色」按钮，调 `POST .../prepare`
+    生成 voiceId 并自动回填（design 还会展示试听音频）；试听调 `POST .../test`，用返回 base64 播放 `<audio>` 并显示 bytes/ms。
   - 当前配置档选择：`SchemaForm sectionId="voice"` + 保存栏；空态提示先去全局添加供应商。
 - 更多类型 tab：planned slots 卡片（label/desc/extend）。
 - `SchemaForm`：支持 `optionsFrom`（ttsProviders / llmProviders / llmModels），动态拉取候选；
@@ -233,7 +255,7 @@ export function createVoiceTools({ tts, manager, mediaSender, getSettings, confi
 ## 11. 测试与验证
 
 - `npm test`（node --test）；新增测试不得联网（mock 全局 fetch / WebSocket / 子进程）。
-- 新增：`test/tts-providers.test.js`（元数据/校验/脱敏）、`test/tts-store.test.js`、`test/tts-engine.test.js`、
+- 新增：`test/tts-providers.test.js`（元数据/校验/脱敏/三组拆分/MiniMax 校验）、`test/migrations-tts-split.test.js`（v7 迁移）、`test/tts-store.test.js`、`test/tts-engine.test.js`、
   `test/tts-adapters.test.js`（4 个 HTTP kind + custom 三种响应；edge 用本地 WebSocket 替身）、
   `test/models-api.test.js`（console 路由 CRUD/test/slots/llm 容错）、`test/tools-voice.test.js`（qqbot_speak）。
 - 既有测试注意：`test/tools-catalog.test.js` 断言 `CAPABILITY_TOOLS` 与 `DEFAULT_CAPABILITIES` key 一致，

@@ -19,10 +19,10 @@ export const DEFAULT_ROUTE = '/overview';
 export const ROUTES: RouteDef[] = [
   { path: '/overview', label: '总览', group: '运行' },
   { path: '/bots', label: '机器人', group: '运行' },
-  { path: '/profiles', label: '配置档与绑定', group: '配置' },
+  { path: '/profiles', label: '配置档', group: '配置' },
   { path: '/models', label: '模型', group: '配置' },
-  { path: '/settings', label: '设置', group: '配置' },
   { path: '/tools', label: '工具与技能', group: '配置' },
+  { path: '/reports', label: '群日报', group: '配置' },
   { path: '/knowledge', label: '知识库', group: '数据' },
   { path: '/memory', label: '记忆', group: '数据' },
   { path: '/members', label: '群友库', group: '数据' },

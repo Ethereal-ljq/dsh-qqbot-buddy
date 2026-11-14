@@ -1,0 +1,4 @@
+{
+  "label": "极简 · 示例模板",
+  "description": "最小可用的自定义日报模板：只用 HTML + CSS 渲染 window.__CARD_DATA__，不带任何素材，适合作为二次开发的起点。"
+}

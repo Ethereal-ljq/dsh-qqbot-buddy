@@ -204,7 +204,7 @@ export function PersonasPage() {
         <span className="hint-text">
           Profile 设置项 persona.activeCardId → 命中的人格卡内容进入提示段；留空则读取 bot 目录下的 persona.md。
         </span>
-        <button type="button" className="link-btn" onClick={() => navigate('/settings')}>去设置</button>
+        <button type="button" className="link-btn" onClick={() => navigate('/profiles')}>去配置档页设置</button>
       </div>
 
       <section className="panel">

@@ -12,6 +12,7 @@ import { useMemo, useState } from 'react';
 import { ApiError, api, toApiError } from '../api/client';
 import type { Bot } from '../api/types';
 import { ActionError } from '../components/ActionError';
+import { BotBindings } from '../components/BotBindings';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { CopyButton } from '../components/CopyButton';
 import { DataTable, type Column } from '../components/DataTable';
@@ -80,6 +81,15 @@ export function BotsPage() {
 
   const detail = detailBot ? bots.find((bot) => bot.id === detailBot.id) ?? detailBot : null;
   const detailRunning = isRunning(detail ? runtime?.bots[detail.id]?.status : undefined);
+  // 绑定属于机器人：详情抽屉里按 bot 过滤 state 快照里的 profiles / bindings。
+  const detailProfiles = useMemo(
+    () => (state?.profiles ?? []).filter((profile) => profile.botId === detail?.id),
+    [state, detail],
+  );
+  const detailBindings = useMemo(
+    () => (state?.bindings ?? []).filter((binding) => binding.botId === detail?.id),
+    [state, detail],
+  );
 
   const openCreate = () => {
     setForm(EMPTY_FORM);
@@ -326,8 +336,10 @@ export function BotsPage() {
 
       <div className="hint-strip">
         <span className="hint-label">Bot → Profile → Binding</span>
-        <span className="hint-text">配置档只切换人设/模型/回复策略；记忆与知识库按 bot 共享，切配置档不会串数据。</span>
-        <button type="button" className="link-btn" onClick={() => navigate('/profiles')}>查看配置档与绑定</button>
+        <span className="hint-text">
+          绑定（哪个群用哪份配置）在机器人详情里维护；配置档只装人设/模型/回复策略，记忆与知识库按 bot 共享。
+        </span>
+        <button type="button" className="link-btn" onClick={() => navigate('/profiles')}>编辑配置档内容</button>
       </div>
 
       <section className="panel">
@@ -460,7 +472,7 @@ export function BotsPage() {
         open={detail !== null}
         title={'机器人 · ' + (detail?.name || '')}
         subtitle={detail?.id}
-        width={520}
+        width={660}
         onClose={() => setDetailBot(null)}
         footer={<button type="button" className="btn btn-ghost" onClick={() => setDetailBot(null)}>关闭</button>}
       >
@@ -512,6 +524,16 @@ export function BotsPage() {
               {detailError ? <ActionError error={detailError} /> : null}
             </section>
 
+            {detail ? (
+              <BotBindings
+                botId={detail.id}
+                profiles={detailProfiles}
+                bindings={detailBindings}
+                activeProfileId={state?.activeProfiles?.[detail.id]}
+                onChanged={() => reloadState()}
+              />
+            ) : null}
+
             <section className="detail-section">
               <h3 className="subsection-title">重置会话</h3>
               <p className="field-help">
@@ -558,7 +580,7 @@ export function BotsPage() {
                     navigate('/profiles');
                   }}
                 >
-                  配置档与绑定
+                  编辑配置档内容
                 </button>
                 <button
                   type="button"

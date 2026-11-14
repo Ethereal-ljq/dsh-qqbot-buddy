@@ -21,7 +21,7 @@ type Widget = 'switch' | 'radio' | 'select' | 'number' | 'text' | 'textarea' | '
 // console API 提供。结果按来源缓存，避免同一页多个字段重复请求；写操作后由页面
 // 调 invalidateSchemaOptions() 失效。
 
-export type SchemaOptionsSource = 'llmProviders' | 'llmModels' | 'ttsProviders';
+export type SchemaOptionsSource = 'llmProviders' | 'llmModels' | 'ttsProviders' | 'asrProviders';
 
 interface DynamicOption {
   value: string;
@@ -31,16 +31,19 @@ interface DynamicOption {
 const dynamicOptionCache = new Map<SchemaOptionsSource, Promise<DynamicOption[]>>();
 
 function isOptionsSource(value?: string): value is SchemaOptionsSource {
-  return value === 'llmProviders' || value === 'llmModels' || value === 'ttsProviders';
+  return value === 'llmProviders' || value === 'llmModels' || value === 'ttsProviders' || value === 'asrProviders';
 }
 
 async function fetchDynamicOptions(source: SchemaOptionsSource): Promise<DynamicOption[]> {
-  if (source === 'ttsProviders') {
+  if (source === 'ttsProviders' || source === 'asrProviders') {
     const payload = await api.ttsProviders();
-    return payload.providers.map((provider) => ({
-      value: provider.id,
-      label: provider.name + ' · ' + (provider.kindShort || provider.kind) + (provider.enabled ? '' : '（已停用）'),
-    }));
+    const wantAsr = source === 'asrProviders';
+    return payload.providers
+      .filter((provider) => (wantAsr ? provider.capability === 'asr' : provider.capability !== 'asr'))
+      .map((provider) => ({
+        value: provider.id,
+        label: provider.name + ' · ' + (provider.kindShort || provider.kind) + (provider.enabled ? '' : '（已停用）'),
+      }));
   }
   const catalog = await api.llmCatalog();
   if (source === 'llmProviders') {

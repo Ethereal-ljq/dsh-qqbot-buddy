@@ -11,10 +11,12 @@
  * 后端未实现（404/501）时不伪造数据：ErrorNote 的「尚未接入」空态 + 重试。
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 import { api, toApiError } from '../api/client';
 import type {
-  ModelSlot, TtsField, TtsKind, TtsProvider, TtsProviderInput, TtsTestResult,
+  ModelSlot, TtsAudioList, TtsField, TtsGroup, TtsKind, TtsPrepareResult, TtsProvider, TtsProviderInput,
+  TtsTestResult,
 } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Drawer } from '../components/Drawer';
@@ -58,6 +60,12 @@ interface ProviderTestState {
   result: TtsTestResult | null;
 }
 
+interface ProviderPrepareState {
+  busy: boolean;
+  error: string | null;
+  result: TtsPrepareResult | null;
+}
+
 /** 以 kind 的默认配置（或既有 config）生成供应商表单草稿。 */
 function draftOfKind(kind: TtsKind, config?: Record<string, unknown>): ProviderDraft {
   const source = config ?? kind.defaultConfig;
@@ -99,14 +107,20 @@ export function ModelsPage() {
   /** optionsFrom 候选缓存失效版本：供应商 CRUD 后 +1，驱动 SchemaForm 重新拉取。 */
   const [optionsRevision, setOptionsRevision] = useState(0);
 
-  // TTS 供应商面板 / 抽屉
-  const [drawer, setDrawer] = useState<{ mode: 'create' | 'edit'; provider: TtsProvider | null } | null>(null);
+  // TTS 供应商面板 / 抽屉（按 默认 / 克隆 / 文字设计 三组拆开）
+  const [drawer, setDrawer] = useState<{ mode: 'create' | 'edit'; provider: TtsProvider | null; groupId: string } | null>(null);
   const [draft, setDraft] = useState<ProviderDraft | null>(null);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [savingProvider, setSavingProvider] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TtsProvider | null>(null);
   const [deletingProvider, setDeletingProvider] = useState(false);
   const [testState, setTestState] = useState<Record<string, ProviderTestState>>({});
+  const [prepareState, setPrepareState] = useState<Record<string, ProviderPrepareState>>({});
+  // 克隆样本文件选择器（只读路径 + 目录浏览，不允许手输）
+  const [picker, setPicker] = useState<{ fieldKey: string } | null>(null);
+  const [pickerData, setPickerData] = useState<TtsAudioList | null>(null);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerError, setPickerError] = useState<string | null>(null);
 
   const selected = profiles.find((profile) => profile.id === selectedId) ?? null;
 
@@ -204,15 +218,24 @@ export function ModelsPage() {
   };
 
   // ── TTS 供应商：抽屉 / CRUD / 试听 ──────────────────────
-  const kindById = useMemo(() => new Map((kinds.data ?? []).map((kind) => [kind.id, kind])), [kinds.data]);
+  const ttsKinds = kinds.data?.kinds ?? [];
+  const ttsGroups = useMemo<TtsGroup[]>(() => {
+    const groups = [...(kinds.data?.groups ?? [])].sort((a, b) => a.order - b.order);
+    if (groups.length > 0) return groups;
+    return [{ id: 'default', label: '默认音色 TTS', order: 1, desc: '' }];
+  }, [kinds.data]);
+  const kindById = useMemo(() => new Map(ttsKinds.map((kind) => [kind.id, kind])), [ttsKinds]);
+  const kindsOfGroup = (groupId: string) => ttsKinds.filter((kind) => kind.group === groupId);
+  const groupById = new Map(ttsGroups.map((group) => [group.id, group]));
+  const groupLabelOf = (groupId: string) => (groupById.get(groupId) || ttsGroups[0] || { label: '默认音色 TTS' }).label;
 
-  const openCreateProvider = () => {
-    const first = kinds.data?.[0];
+  const openCreateProvider = (groupId: string) => {
+    const first = kindsOfGroup(groupId)[0];
     if (!first) {
-      notify('error', '供应商类型元数据尚未加载');
+      notify('error', '该分组下暂无可用的供应商类型');
       return;
     }
-    setDrawer({ mode: 'create', provider: null });
+    setDrawer({ mode: 'create', provider: null, groupId });
     setDraft(draftOfKind(first));
     setDraftError(null);
   };
@@ -223,7 +246,7 @@ export function ModelsPage() {
       notify('error', '未知的 TTS 供应商类型：' + provider.kind);
       return;
     }
-    setDrawer({ mode: 'edit', provider });
+    setDrawer({ mode: 'edit', provider, groupId: provider.group || kind.group });
     setDraft({ ...draftOfKind(kind, provider.config), name: provider.name, enabled: provider.enabled });
     setDraftError(null);
   };
@@ -231,11 +254,17 @@ export function ModelsPage() {
   const changeDraftKind = (kindId: string) => {
     const kind = kindById.get(kindId);
     if (!kind) return;
-    setDraft((prev) => ({
-      ...draftOfKind(kind),
-      name: prev && prev.name.trim() !== '' ? prev.name : kind.label,
-      enabled: prev ? prev.enabled : true,
-    }));
+    setDraft((prev) => {
+      // 名称若还是上一个类型的自动填充值（kind.label），切换类型时跟着换，避免出现
+      // 「供应商类型 = MiniMax 音色克隆、名称 = 小米 MiMo 音色克隆」的错配。
+      const oldKind = prev ? kindById.get(prev.kind) : null;
+      const autoName = !prev || prev.name.trim() === '' || (oldKind ? prev.name.trim() === oldKind.label : false);
+      return {
+        ...draftOfKind(kind),
+        name: autoName ? kind.label : prev.name,
+        enabled: prev ? prev.enabled : true,
+      };
+    });
   };
 
   const setConfigField = (key: string, value: unknown) => {
@@ -301,6 +330,7 @@ export function ModelsPage() {
       setDrawer(null);
       providers.reload();
       invalidateSchemaOptions('ttsProviders');
+      invalidateSchemaOptions('asrProviders');
       setOptionsRevision((value) => value + 1);
     } catch (err) {
       setDraftError(toApiError(err).message);
@@ -318,6 +348,7 @@ export function ModelsPage() {
       setDeleteTarget(null);
       providers.reload();
       invalidateSchemaOptions('ttsProviders');
+      invalidateSchemaOptions('asrProviders');
       setOptionsRevision((value) => value + 1);
     } catch (err) {
       notify('error', '删除失败：' + toApiError(err).message);
@@ -334,6 +365,55 @@ export function ModelsPage() {
     } catch (err) {
       setTestState((prev) => ({ ...prev, [provider.id]: { busy: false, error: toApiError(err).message, result: null } }));
     }
+  };
+
+  /** MiniMax 克隆 / 文字设计：执行「生成音色」，成功后 voiceId 自动写回供应商配置。 */
+  const runPrepare = async (provider: TtsProvider) => {
+    const kind = kindById.get(provider.kind);
+    const label = kind?.prepareLabel || '生成音色';
+    setPrepareState((prev) => ({ ...prev, [provider.id]: { busy: true, error: null, result: null } }));
+    try {
+      const result = await api.prepareTtsProvider(provider.id);
+      setPrepareState((prev) => ({ ...prev, [provider.id]: { busy: false, error: null, result } }));
+      if (result.voiceId) notify('ok', label + '成功：' + result.voiceId);
+      else notify('ok', label + '完成');
+      providers.reload();
+    } catch (err) {
+      setPrepareState((prev) => ({ ...prev, [provider.id]: { busy: false, error: toApiError(err).message, result: null } }));
+    }
+  };
+
+  // ── 克隆样本：文件选择器（只读路径 + 目录浏览）────────────
+  const loadPicker = async (targetPath?: string) => {
+    setPickerLoading(true);
+    setPickerError(null);
+    try {
+      const data = await api.ttsAudioList(targetPath);
+      setPickerData(data);
+    } catch (err) {
+      setPickerError(toApiError(err).message);
+      setPickerData(null);
+    } finally {
+      setPickerLoading(false);
+    }
+  };
+
+  const openAudioPicker = (fieldKey: string) => {
+    setPicker({ fieldKey });
+    setPickerData(null);
+    void loadPicker(undefined);
+  };
+
+  const closeAudioPicker = () => {
+    setPicker(null);
+    setPickerError(null);
+    setPickerData(null);
+  };
+
+  const chooseAudioFile = (filePath: string) => {
+    if (!picker) return;
+    setConfigField(picker.fieldKey, filePath);
+    closeAudioPicker();
   };
 
   // ── 通用渲染片段 ─────────────────────────────────────────
@@ -467,6 +547,35 @@ export function ModelsPage() {
         />
       );
     }
+    if (field.type === 'audio') {
+      // 只读路径 + 文件选择器；不允许手输（避免拼错/路径不存在）
+      const text = typeof value === 'string' ? value : '';
+      return (
+        <div className="audio-path-field">
+          <input
+            id={id}
+            className="input mono"
+            readOnly
+            placeholder={field.placeholder || '未选择音频文件'}
+            value={text}
+            title={text}
+          />
+          <button type="button" className="btn btn-sm" onClick={() => openAudioPicker(field.key)}>
+            选择音频
+          </button>
+          {text !== '' ? (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => setConfigField(field.key, '')}
+              title="清空样本"
+            >
+              清空
+            </button>
+          ) : null}
+        </div>
+      );
+    }
     return (
       <input
         id={id}
@@ -481,12 +590,33 @@ export function ModelsPage() {
   };
 
   const providerList = providers.data?.providers ?? [];
+  /** TTS 供应商（排除 ASR：ASR 与 TTS 共用供应商表，但不参与语音合成/默认音色选择）。 */
+  const ttsProviderList = providerList.filter((provider) => provider.capability !== 'asr');
   const defaultProvider = providers.data?.defaultProvider ?? '';
   const defaultProviderName = providerList.find((provider) => provider.id === defaultProvider)?.name || defaultProvider;
 
+  /** 全局默认供应商写在 global 层（voice.defaultProvider）：不带 bot 参数即写全局。 */
+  const [globalSaving, setGlobalSaving] = useState(false);
+  const setGlobalDefault = async (id: string) => {
+    setGlobalSaving(true);
+    try {
+      await api.saveSettings(undefined, { 'voice.defaultProvider': id });
+      notify('ok', id === '' ? '已清空全局默认供应商' : '已设为全局默认：' + (providerList.find((item) => item.id === id)?.name || id));
+      providers.reload();
+    } catch (err) {
+      const error = toApiError(err);
+      notify('error', '保存全局默认失败：' + error.message, error.code);
+    } finally {
+      setGlobalSaving(false);
+    }
+  };
+
   const renderProviderCard = (provider: TtsProvider): ReactNode => {
     const kind = kindById.get(provider.kind);
+    const isAsr = kind?.capability === 'asr' || provider.capability === 'asr';
     const test = testState[provider.id];
+    const prepare = prepareState[provider.id];
+    const hasVoiceId = String(provider.config.voiceId || '') !== '';
     return (
       <article
         key={provider.id}
@@ -499,17 +629,50 @@ export function ModelsPage() {
         </div>
         <div className="provider-meta">
           <span className="tag">{provider.kindShort || provider.kindLabel || provider.kind}</span>
-          <span className="mono">{provider.outputFormat}</span>
+          {kind?.prepareLabel ? (
+            <span className="tag">{hasVoiceId ? '音色已生成' : '待生成音色'}</span>
+          ) : null}
+          {!isAsr ? <span className="mono">{provider.outputFormat}</span> : null}
           <span>{provider.hasSecret ? '已配置密钥' : kind?.needsSecret ? '缺少密钥' : '免密钥'}</span>
         </div>
         <p className="provider-summary mono">{provider.summary || '（默认配置）'}</p>
         <div className="provider-actions">
           <button type="button" className="btn btn-sm" onClick={() => openEditProvider(provider)}>编辑</button>
-          <button type="button" className="btn btn-sm" onClick={() => void testProvider(provider)} disabled={test?.busy}>
-            {test?.busy ? '合成中…' : '试听'}
-          </button>
+          {kind?.prepareLabel ? (
+            <button type="button" className="btn btn-sm" onClick={() => void runPrepare(provider)} disabled={prepare?.busy || test?.busy}>
+              {prepare?.busy ? '生成中…' : (hasVoiceId ? '重新' + kind.prepareLabel : kind.prepareLabel)}
+            </button>
+          ) : null}
+          {!isAsr ? (
+            <button type="button" className="btn btn-sm" onClick={() => void testProvider(provider)} disabled={test?.busy || prepare?.busy}>
+              {test?.busy ? '合成中…' : '试听'}
+            </button>
+          ) : null}
           <button type="button" className="btn btn-sm btn-danger-text" onClick={() => setDeleteTarget(provider)}>删除</button>
         </div>
+        {prepare && (prepare.busy || prepare.error || prepare.result) ? (
+          <div className="test-bar">
+            {prepare.busy ? <span className="muted">正在{kind?.prepareLabel || '生成音色'}…（上传/生成可能需要几十秒）</span> : null}
+            {prepare.error ? (
+              <span className="field-error">{kind?.prepareLabel || '生成音色'}失败：{prepare.error}</span>
+            ) : null}
+            {prepare.result ? (
+              <>
+                {prepare.result.demoAudioBase64 ? (
+                  <audio
+                    className="test-audio"
+                    controls
+                    src={'data:' + (prepare.result.demoMimeType || 'audio/mpeg') + ';base64,' + prepare.result.demoAudioBase64}
+                  />
+                ) : null}
+                <span className="test-meta mono">
+                  音色 ID：{prepare.result.voiceId || '（空）'}
+                  {prepare.result.demoBytes ? ' · 试听 ' + fmtBytes(prepare.result.demoBytes) : ''}
+                </span>
+              </>
+            ) : null}
+          </div>
+        ) : null}
         {test && (test.busy || test.error || test.result) ? (
           <div className="test-bar">
             {test.busy ? <span className="muted">正在调用供应商合成试听…</span> : null}
@@ -537,48 +700,116 @@ export function ModelsPage() {
     );
   };
 
+  const providerGroups = ttsGroups.map((group) => ({
+    group,
+    kinds: kindsOfGroup(group.id),
+    providers: providerList.filter((provider) => (provider.group || 'default') === group.id),
+  }));
+
+  const renderProviderGroup = (view: { group: TtsGroup; kinds: TtsKind[]; providers: TtsProvider[] }): ReactNode => {
+    const { group, kinds: groupKinds, providers: groupProviders } = view;
+    const groupDefault = groupProviders.find((provider) => provider.id === defaultProvider) || null;
+    return (
+      <section className="provider-group" key={group.id}>
+        <header className="provider-group-head">
+          <div>
+            <h3 className="provider-group-title">
+              {group.label}
+              <span className="provider-group-count mono">{groupProviders.length} 个</span>
+              {groupDefault ? <Badge tone="info">全局默认：{groupDefault.name}</Badge> : null}
+            </h3>
+            <p className="provider-group-desc">{group.desc || '该类供应商用于语音合成。'}</p>
+          </div>
+          <div className="provider-group-actions">
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => openCreateProvider(group.id)}
+              disabled={groupKinds.length === 0}
+            >
+              新增{group.label}
+            </button>
+          </div>
+        </header>
+        {groupProviders.length === 0 ? (
+          <div className="provider-group-empty">
+            {groupKinds.length === 0 ? (
+              <span className="muted">该分组暂无可用的供应商类型（等后端 kinds 元数据接入）。</span>
+            ) : (
+              <>
+                <span className="muted">
+                  {group.id === 'default'
+                    ? '还没有默认音色供应商；'
+                    : group.id === 'clone'
+                      ? '还没有克隆供应商；'
+                      : '还没有文字设计供应商；'}
+                  新增一个后即可在下方配置档选用或试听。
+                </span>
+                <button type="button" className="btn btn-sm btn-primary" onClick={() => openCreateProvider(group.id)}>
+                  新增{group.label}
+                </button>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="provider-grid">{groupProviders.map(renderProviderCard)}</div>
+        )}
+      </section>
+    );
+  };
+
   const providerPanel = (
     <section className="panel">
       <header className="panel-head">
         <div>
           <h2 className="panel-title">TTS 供应商（全局）</h2>
           <p className="panel-desc">
-            所有配置档共用；API Key 只写不读，列表只显示是否已配置。表单字段由供应商种类的 kinds.fields 元数据自动生成。
+            四类能力分开配置：<strong>默认音色</strong>（内置/预置音色）、<strong>音色克隆</strong>（选本机音频样本）、<strong>文字设计</strong>（自然语言描述声音）、<strong>语音识别 ASR</strong>（入站语音转文字，不参与合成）。
+            所有配置档共用；API Key 只写不读，列表只显示是否已配置。
           </p>
         </div>
         <div className="panel-tools">
           {defaultProvider !== '' ? <Badge tone="info">全局默认：{defaultProviderName}</Badge> : <span className="muted">未设置全局默认</span>}
           <button type="button" className="btn btn-sm btn-ghost" onClick={() => providers.reload()} disabled={providers.loading}>刷新</button>
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={openCreateProvider}
-            disabled={!kinds.data || kinds.data.length === 0}
-          >
-            新增供应商
-          </button>
         </div>
       </header>
-      <div className="panel-body">
-        {providers.loading || kinds.loading ? (
-          <span className="skeleton skeleton-block" />
-        ) : providers.error ? (
+      <div className="panel-body tts-provider-default">
+        <Field
+          label="默认 TTS 供应商（全局）"
+          htmlFor="tts-default-provider"
+          scope="global"
+          help="配置档没有显式选择供应商时使用它；留空则回退到第一个启用的供应商。对所有配置档生效。"
+        >
+          <select
+            id="tts-default-provider"
+            className="input"
+            value={defaultProvider}
+            disabled={globalSaving || providers.loading}
+            onChange={(event) => void setGlobalDefault(event.target.value)}
+          >
+            <option value="">（未设置 · 回退到第一个启用供应商）</option>
+            {ttsProviderList.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name} · {provider.kindShort || provider.kind}{provider.enabled ? '' : '（已停用）'}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div className="panel-body tts-provider-groups">
+        {providers.loading || kinds.loading ? <span className="skeleton skeleton-block" /> : null}
+        {!providers.loading && !kinds.loading && providers.error ? (
           <ErrorNote error={providers.error} onRetry={providers.reload} />
-        ) : kinds.error ? (
+        ) : null}
+        {!providers.loading && !kinds.loading && !providers.error && kinds.error ? (
           <ErrorNote error={kinds.error} onRetry={kinds.reload} />
-        ) : providerList.length === 0 ? (
-          <EmptyState
-            title="还没有 TTS 供应商"
-            description="新增一个语音供应商（Edge 免 Key / MiMo / 百炼 / OpenAI 兼容 / 自定义 HTTP / 本地命令），之后在下方为每个配置档选择。"
-            action={<button type="button" className="btn btn-primary btn-sm" onClick={openCreateProvider}>新增供应商</button>}
-            endpoint="GET /api/models/tts/providers"
-          />
-        ) : (
-          <div className="provider-grid">{providerList.map(renderProviderCard)}</div>
-        )}
+        ) : null}
+        {!providers.loading && !kinds.loading && !providers.error && !kinds.error
+          ? providerGroups.map(renderProviderGroup)
+          : null}
       </div>
       <p className="panel-note mono">
-        数据来源 GET /api/models/tts/providers · 字段元数据 GET /api/models/tts/kinds · 试听 POST /api/models/tts/providers/:id/test
+        数据来源 GET /api/models/tts/providers · kinds/groups GET /api/models/tts/kinds · 克隆样本选择 GET /api/models/tts/audio/list · 试听 POST /api/models/tts/providers/:id/test
       </p>
     </section>
   );
@@ -682,7 +913,7 @@ export function ModelsPage() {
             </p>
           </div>
           <div className="panel-tools">
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => navigate('/settings')}>调整全局默认</button>
+            <span className="muted">全局默认在上方「TTS 供应商（全局）」里设置</span>
           </div>
         </header>
         <div className="panel-body">
@@ -898,8 +1129,8 @@ export function ModelsPage() {
 
       <Drawer
         open={drawer !== null}
-        title={drawer?.mode === 'edit' ? '编辑 TTS 供应商' : '新增 TTS 供应商'}
-        subtitle={draft ? draft.kind + ' · ' + (kindById.get(draft.kind)?.label ?? '') : undefined}
+        title={(drawer?.mode === 'edit' ? '编辑' : '新增') + (drawer ? groupLabelOf(drawer.groupId) : 'TTS') + '供应商'}
+        subtitle={draft ? groupLabelOf(drawer?.groupId ?? 'default') + ' · ' + (kindById.get(draft.kind)?.label ?? '') : undefined}
         width={560}
         onClose={() => { if (!savingProvider) setDrawer(null); }}
         footer={(
@@ -939,7 +1170,7 @@ export function ModelsPage() {
                 disabled={drawer?.mode === 'edit'}
                 onChange={(event) => changeDraftKind(event.target.value)}
               >
-                {(kinds.data ?? []).map((kind) => (
+                {kindsOfGroup(drawer?.groupId ?? 'default').map((kind) => (
                   <option key={kind.id} value={kind.id}>{kind.label}</option>
                 ))}
               </select>
@@ -1003,6 +1234,81 @@ export function ModelsPage() {
           </div>
         ) : null}
       </Drawer>
+
+      {picker ? createPortal(
+        <div
+          className="overlay center"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) closeAudioPicker(); }}
+        >
+          <div className="modal file-picker" role="dialog" aria-modal="true" aria-label="选择克隆样本音频">
+            <div className="file-picker-head">
+              <div>
+                <h2 className="modal-title">选择克隆样本音频</h2>
+                <p className="file-picker-hint">只显示目录和音频文件；选中后只保存本机路径，不会上传到第三方服务。</p>
+              </div>
+              <button type="button" className="drawer-close" onClick={closeAudioPicker} aria-label="关闭">×</button>
+            </div>
+            <div className="file-picker-roots">
+              {(pickerData?.roots ?? []).map((root) => {
+                const active = Boolean(pickerData && (pickerData.path === root.path || pickerData.path.startsWith(root.path + '/')));
+                return (
+                  <button
+                    key={root.id}
+                    type="button"
+                    className={'btn btn-sm btn-ghost file-picker-root' + (active ? ' active' : '')}
+                    onClick={() => void loadPicker(root.path)}
+                  >
+                    {root.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="file-picker-path mono" title={pickerData?.path ?? ''}>
+              {pickerLoading ? '加载中…' : (pickerData?.path ?? '')}
+            </div>
+            <div className="file-picker-body">
+              {pickerLoading ? (
+                <span className="skeleton skeleton-block" />
+              ) : pickerError ? (
+                <div className="note note-error compact" role="alert">
+                  <span className="note-title">{pickerError}</span>
+                </div>
+              ) : pickerData ? (
+                <>
+                  {pickerData.parent ? (
+                    <button type="button" className="file-entry dir" onClick={() => void loadPicker(pickerData.parent ?? undefined)}>
+                      <span className="file-entry-icon" aria-hidden="true">↑</span>
+                      <span className="file-entry-name">上一级</span>
+                    </button>
+                  ) : null}
+                  {pickerData.entries.length === 0 ? (
+                    <p className="muted file-picker-empty">这个目录没有子目录或音频文件。</p>
+                  ) : pickerData.entries.map((entry) => (
+                    entry.type === 'dir' ? (
+                      <button key={entry.path} type="button" className="file-entry dir" onClick={() => void loadPicker(entry.path)}>
+                        <span className="file-entry-icon" aria-hidden="true">▸</span>
+                        <span className="file-entry-name">{entry.name}</span>
+                        <span className="file-entry-pick">进入</span>
+                      </button>
+                    ) : (
+                      <button key={entry.path} type="button" className="file-entry file" onClick={() => chooseAudioFile(entry.path)}>
+                        <span className="file-entry-icon" aria-hidden="true">♪</span>
+                        <span className="file-entry-name">{entry.name}</span>
+                        {typeof entry.size === 'number' ? <span className="file-entry-meta mono">{fmtBytes(entry.size)}</span> : null}
+                        <span className="file-entry-pick">选择</span>
+                      </button>
+                    )
+                  ))}
+                </>
+              ) : null}
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={closeAudioPicker}>取消</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
     </div>
   );
 }
