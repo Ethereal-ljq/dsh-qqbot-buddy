@@ -107,6 +107,15 @@ npx -y --package=dsh-qqbot-buddy@next dsh-qqbot-buddy-install --dry-run
 node scripts/verify-standalone-install.mjs --spec dsh-qqbot-buddy@next
 ```
 
+两个实测踩过的坑：
+
+- **刚发布时 `@next` 可能仍解析到旧版本**：npm registry 要几分钟才把新版本放进 packument，pnpm 还会缓存元数据。
+  装的时候用精确版本（`dsh plugin --profile <名字> add dsh-qqbot-buddy@1.0.0-alpha.6`）最稳，或者等几分钟再装。
+- **`pnpm add` 会顺手清理 profile 里没写进 `package.json` 的残留包**（extraneous）。
+  如果用户的 node_modules 手动塞过东西，装完会看到一串 `-` 的删除日志；这些包本来也不受 dsh 管理，
+  但发布说明里最好提醒一句「装完看一眼被清掉的包」。
+- 新版本太新时 pnpm 的供应链策略会给 `pnpm-workspace.yaml` 追加 `minimumReleaseAgeExclude` 条目，属正常现象。
+
 最后在 GitHub 上写 Release：摘要用 CHANGELOG 的对应小节，附安装命令与兼容范围。
 
 ## 5. 回滚与补救
