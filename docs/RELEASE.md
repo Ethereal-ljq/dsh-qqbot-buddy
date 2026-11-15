@@ -110,14 +110,21 @@ npx -y --package=dsh-qqbot-buddy@next dsh-qqbot-buddy-install --dry-run
 node scripts/verify-standalone-install.mjs --spec dsh-qqbot-buddy@next
 ```
 
-两个实测踩过的坑：
+### 发布后立刻装到别人的 profile 会踩的坑（实测）
 
-- **刚发布时 `@next` 可能仍解析到旧版本**：npm registry 要几分钟才把新版本放进 packument，pnpm 还会缓存元数据。
-  装的时候用精确版本（`dsh plugin --profile <名字> add dsh-qqbot-buddy@1.0.0-alpha.6`）最稳，或者等几分钟再装。
-- **`pnpm add` 会顺手清理 profile 里没写进 `package.json` 的残留包**（extraneous）。
-  如果用户的 node_modules 手动塞过东西，装完会看到一串 `-` 的删除日志；这些包本来也不受 dsh 管理，
-  但发布说明里最好提醒一句「装完看一眼被清掉的包」。
-- 新版本太新时 pnpm 的供应链策略会给 `pnpm-workspace.yaml` 追加 `minimumReleaseAgeExclude` 条目，属正常现象。
+1. **registry 有传播延迟**：`npm publish` 返回成功后，packument 里要过 1–3 分钟才出现新版本
+   （输出里的「Your package is being processed」就是这件事）。着急装就用精确版本号。
+2. **pnpm 会缓存整个包的元数据**：缓存命中时 `pnpm add dsh-qqbot-buddy@<新版本>` 会报
+   `ERR_PNPM_NO_MATCHING_VERSION`，还提示「latest is 1.0.0-alpha.0」——那是旧快照。
+   删掉该包的缓存文件再装即可：
+   `rm ~/.cache/pnpm/v11/metadata/https%3A+registry.npmjs.org/dsh-qqbot-buddy.jsonl`
+   （也可等缓存自然过期，或加 `--prefer-online`）。
+3. **pnpm 的供应链策略会拦住「太新」的版本**：`minimumReleaseAge` 默认给新发布包一段隔离期，
+   拦截时输出 `✗ Lockfile failed supply-chain policy check`。在目标 profile 的
+   `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 里加上 `dsh-qqbot-buddy@<版本>` 再装
+   （pnpm 平时会自己追加，非交互模式失败时就要手加）。
+4. **`pnpm add` 会顺手清理 profile 里没写进 `package.json` 的残留包**（extraneous）：
+   装完会看到一串 `-` 的删除日志。这些包本来就不受 dsh 管理，但最好看一眼有没有误伤。
 
 全部通过后把这一版提升为 `latest`（普通安装就能拿到）：
 
