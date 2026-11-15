@@ -41,8 +41,8 @@ Web 管理控制台。你不需要额外部署数据库、消息队列或前端�
     # 或使用安装器（自动初始化/校验 profile、登记 bundle、自检）
     npx -y --package=dsh-qqbot-buddy@next dsh-qqbot-buddy-install --profile qqbot --spec dsh-qqbot-buddy@next
 
-当前发布的是 `1.0.0-alpha.6`，走 npm 的 `@next` 标签（`latest` 还停在早期版本，安装请一律带 `@next`）；
-稳定版发布后可直接 `dsh plugin add dsh-qqbot-buddy`。
+当前发布的是 `1.0.0-alpha.6`，`latest` 与 `@next` 都指向它，所以带不带标签装到的都是这一版；
+`@next` 用于追最新的预发布构建。
 
 **方式 B：从 GitHub 安装（无需 npm 账号）**
 

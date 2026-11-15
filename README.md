@@ -6,16 +6,17 @@
 
 | 版本 | 发布通道 | 运行环境 | dsh | 许可证 |
 | --- | --- | --- | --- | --- |
-| `1.0.0-alpha.6` | npm `next`（预发布） | Node.js ≥ 24 | `0.2.2` – `0.2.x` | MIT |
+| `1.0.0-alpha.6` | npm `latest` + `next`（预发布） | Node.js ≥ 24 | `0.2.2` – `0.2.x` | MIT |
 
 > 现在还是 alpha：配置项与接口仍会调整，升级前请先备份数据目录（见 [数据与备份](#数据与备份)）。
-> npm 的 `latest` 标签还停在早期版本，**安装请一律带上 `@next`**。
+> `latest` 与 `next` 当前都指向 `1.0.0-alpha.6`：装不带标签也行，`@next` 则始终是最新预发布。
 
 ## 快速开始
 
 ```bash
 # 1) 装进某个 dsh profile（不写 --profile 时默认 web）
-dsh plugin --profile web add dsh-qqbot-buddy@next
+dsh plugin --profile web add dsh-qqbot-buddy          # = @latest
+dsh plugin --profile web add dsh-qqbot-buddy@next     # 要最新预发布时用这个
 
 # 2) 重启 dsh，控制台随插件一起启动
 dsh web
@@ -302,8 +303,9 @@ scripts/                安装器、独立安装验收、探针与冒烟脚本
 
 - **分支**：`v2` 是默认分支，也是唯一的开发线（`1.0.0-alpha.x` 都在这里）。
   v1 线（`v0.21.0` 及之前）已归档为 `v1-legacy` 分支与 `v1-archive` 标签，只读保留，不再更新。
-- **发布通道**：预发布版发到 npm 的 `next` 标签（`package.json` 里 `publishConfig.tag`），稳定版再切 `latest`。
-  安装命令一律带 `@next`，避免装到早期的 `latest`。
+- **发布通道**：发布先落在 `next`（`package.json` 里 `publishConfig.tag`），跑完独立安装验收后再把同一个版本
+  提升为 `latest`：`npm dist-tag add dsh-qqbot-buddy@<版本> latest`。所以 `latest` 永远是「验证过的最新版」，
+  `next` 用来放刚发布、还没验收的构建。
 - **兼容范围**：`engines.dsh` 声明支持的 dsh 版本，`engines.node` 声明 Node 下限；
   dsh 在加载前会先校验，不匹配时给出可读的拒绝信息（可用 `dsh plugin allow-version` 显式豁免）。
 - **发布包**：`lib/`、`web/dist/`（已构建）、`custom/templates/`、`docs/`、`scripts/`、

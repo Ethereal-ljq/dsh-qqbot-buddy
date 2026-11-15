@@ -6,11 +6,12 @@
 
 | 阶段 | 版本号 | npm 标签 | 安装命令 |
 | --- | --- | --- | --- |
-| 预发布（当前） | `1.0.0-alpha.N` | `next` | `dsh plugin add dsh-qqbot-buddy@next` |
+| 预发布（当前） | `1.0.0-alpha.N` | 发布到 `next`，验收后提升到 `latest` | `dsh plugin add dsh-qqbot-buddy` 或 `…@next` |
 | 稳定版 | `1.0.0` | `latest` | `dsh plugin add dsh-qqbot-buddy` |
 
-- `package.json` 里的 `publishConfig.tag` 固定为 `next`，所以 `npm publish` **不会**误伤 `latest`；
-  发布稳定版时要显式 `npm publish --tag latest`。
+- `package.json` 里的 `publishConfig.tag` 固定为 `next`：`npm publish` 先只动 `next`，**不会**误伤 `latest`。
+  跑完 §4 的验收后再提升：`npm dist-tag add dsh-qqbot-buddy@<版本> latest`。
+  这样 `latest` 恒等于「验证过的最新版」，`next` 用来放刚发布还没验收的构建。
 - `engines.dsh` 是兼容契约：改了依赖的宿主能力就同步改这个范围，dsh 会在加载前校验并给出可读的拒绝信息。
 - **分支**：`v2` 是仓库默认分支与唯一开发线；v1 线已归档为 `v1-legacy` 分支 + `v1-archive` 标签（只读）。
   发布提交与 tag 都推到 `v2`。
@@ -118,6 +119,14 @@ node scripts/verify-standalone-install.mjs --spec dsh-qqbot-buddy@next
   但发布说明里最好提醒一句「装完看一眼被清掉的包」。
 - 新版本太新时 pnpm 的供应链策略会给 `pnpm-workspace.yaml` 追加 `minimumReleaseAgeExclude` 条目，属正常现象。
 
+全部通过后把这一版提升为 `latest`（普通安装就能拿到）：
+
+```bash
+npm dist-tag add dsh-qqbot-buddy@1.0.0-alpha.6 latest
+npm view dsh-qqbot-buddy dist-tags --json     # latest 与 next 应指向同一版本
+npm view dsh-qqbot-buddy version              # 不带标签时解析到的版本
+```
+
 最后在 GitHub 上写 Release：摘要用 CHANGELOG 的对应小节，附安装命令与兼容范围。
 
 ## 5. 回滚与补救
@@ -136,7 +145,8 @@ npm 不支持删除已发布版本（24 小时内可 unpublish，但不要依赖
 ```bash
 npm version 1.0.0 --no-git-tag-version
 npm test && npm run verify:standalone
-npm publish --tag latest
+npm publish                     # 先发 next
+npm dist-tag add dsh-qqbot-buddy@1.0.0 latest   # 验收后再提升
 ```
 
 同时更新：
