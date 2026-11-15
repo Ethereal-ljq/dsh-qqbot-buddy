@@ -1,6 +1,6 @@
 # dsh-qqbot-buddy v2 用户手册
 
-> 适用版本：1.0.0-alpha.6（v2 分支，2026-11）。面向使用者；设计契约见 [DESIGN-v2.md](DESIGN-v2.md)，
+> 适用版本：1.0.0-rc.1（v2 分支，2026-11）。面向使用者；设计契约见 [DESIGN-v2.md](DESIGN-v2.md)，
 > QQ 传输层见 [TRANSPORT-CONTRACT.md](TRANSPORT-CONTRACT.md)，开发细节见仓库 [README](../README.md)。
 
 v2 是 DeepSeek Harness（dsh）的 QQ 机器人插件：把 dsh 的模型与工具接到 QQ，并自带一个独立的
@@ -41,7 +41,7 @@ Web 管理控制台。你不需要额外部署数据库、消息队列或前端�
     # 或使用安装器（自动初始化/校验 profile、登记 bundle、自检）
     npx -y --package=dsh-qqbot-buddy@next dsh-qqbot-buddy-install --profile qqbot --spec dsh-qqbot-buddy@next
 
-当前发布的是 `1.0.0-alpha.6`，`latest` 与 `@next` 都指向它，所以带不带标签装到的都是这一版；
+当前发布的是 `1.0.0-rc.1`，`latest` 与 `@next` 都指向它，所以带不带标签装到的都是这一版；
 `@next` 用于追最新的预发布构建。
 
 **方式 B：从 GitHub 安装（无需 npm 账号）**

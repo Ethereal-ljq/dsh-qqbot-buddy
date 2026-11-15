@@ -77,10 +77,10 @@ README 本身不内嵌图片（npm 页面保持纯文本），新增截图只加
 
 ```bash
 # 版本号
-npm version 1.0.0-alpha.6 --no-git-tag-version
+npm version <版本> --no-git-tag-version     # 例：1.0.0-rc.2
 # 提交
-git add -A && git commit -m "chore(release): 1.0.0-alpha.6"
-git tag v1.0.0-alpha.6
+git add -A && git commit -m "chore(release): <版本>"
+git tag v<版本>
 git push origin v2 --tags
 
 # 发布（publishConfig.tag = next，自动发到 next；prepublishOnly 会再跑一遍单元测试）
@@ -122,7 +122,7 @@ node scripts/verify-standalone-install.mjs --spec dsh-qqbot-buddy@next
 全部通过后把这一版提升为 `latest`（普通安装就能拿到）：
 
 ```bash
-npm dist-tag add dsh-qqbot-buddy@1.0.0-alpha.6 latest
+npm dist-tag add dsh-qqbot-buddy@<版本> latest
 npm view dsh-qqbot-buddy dist-tags --json     # latest 与 next 应指向同一版本
 npm view dsh-qqbot-buddy version              # 不带标签时解析到的版本
 ```
