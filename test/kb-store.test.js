@@ -39,9 +39,10 @@ test('ingest 新建文档：返回 doc/chunks/changed，source 幂等', (t) => {
 
 test('内容变更时事务内替换 chunks，FTS 同步更新', (t) => {
   const { kb } = setup(t);
-  kb.ingest({ botId: 'bot-a', source: 'policy.md', text: '退款需要七个工作日。' });
+  const first = kb.ingest({ botId: 'bot-a', source: 'policy.md', text: '退款需要七个工作日。' });
   const changed = kb.ingest({ botId: 'bot-a', source: 'policy.md', text: '换货需要十五个工作日。' });
   assert.equal(changed.changed, true);
+  assert.equal(changed.docId, first.docId, '同 source 内容变更应原地更新，docId 不变');
   assert.equal(changed.chunks, 1);
   assert.equal(kb.search({ botId: 'bot-a', query: '退款' }).length, 0, '旧 chunks 的 FTS 命中必须消失');
   assert.equal(kb.search({ botId: 'bot-a', query: '换货需要' }).length, 1, '新 chunks 应可检索');

@@ -112,6 +112,31 @@ test('两档策略：被动工具默认不给 restrict，激活后才进 allow',
   assert.deepEqual(lit.held, []);
 });
 
+test('applyToolPolicy（2026-11-16）：被 restrict 藏起来的全局工具，激活后必须能放回来', () => {
+  // 现场：generate_image 是全局工具，首轮被动档 → 不在 allow → restrict 藏起来；
+  // 之后 qqbot_enable('imagegen') 激活，visible 里已经没有它，只能靠 knownNames 重新发现。
+  const visible = new Map([['read', { name: 'read', description: '' }]]);
+  const known = new Set(['read', 'generate_image', 'edit_image']);
+  const restrictable = new Set(['read', 'generate_image', 'edit_image']);
+  const view = () => ({ visible, knownNames: known, restrictableNames: restrictable });
+  const applied = [];
+  const agentCtx = {
+    tools: {
+      view,
+      restrict: ({ allow }) => { applied.push(allow.slice()); return () => {}; },
+    },
+  };
+  const settings = {
+    tools: { mode: 'allow', allow: ['read', 'generate_image', 'edit_image'], capabilities: { imagegen: true } },
+  };
+  const first = applyToolPolicy(agentCtx, {}, { settings, isActive: (name) => name === 'read' });
+  assert.deepEqual(first.allow, ['read'], '首轮只有常驻档进 allow');
+  // 第二轮：激活 imagegen，但 visible 仍然没有这两个工具（模拟被 restrict 藏起来）
+  const second = applyToolPolicy(agentCtx, {}, { settings, isActive: () => true, previous: first });
+  assert.deepEqual([...second.allow].sort(), ['edit_image', 'generate_image', 'read'], 'known-but-hidden 工具必须能重新放回 allow');
+  assert.deepEqual([...(applied.at(-1) || [])].sort(), ['edit_image', 'generate_image', 'read'], 'restrict 收到的应是完整 allow');
+});
+
 test('applyToolPolicy：集合不变则复用，变化则挂新撤旧', () => {
   const calls = [];
   const disposed = [];

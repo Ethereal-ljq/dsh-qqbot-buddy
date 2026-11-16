@@ -1,6 +1,6 @@
 {
   "name": "dsh-qqbot-buddy",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.1-alpha.1",
   "description": "DSH（DeepSeek Harness）QQ 官方机器人插件：自带管理控制台、多机器人隔离、配置档、工具与技能、SQLite 记忆/知识库、群日报、语音 TTS/ASR",
   "type": "module",
   "license": "MIT",

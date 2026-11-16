@@ -414,6 +414,10 @@ test('kb：未装配内核时 docs 空数组、写接口 501；装配后可用',
     }],
     ingest: () => ({ docId: 7, chunks: 2, changed: true, doc: { id: 7, source: 'faq.md' } }),
     search: () => [{ chunkId: 1, docId: 7, text: '原文', title: '常见问题', score: 1.5, mode: 'fts', snippet: '…' }],
+    getDoc: ({ docId }) => ({
+      id: Number(docId), botId: 'x', source: 'faq.md', title: '常见问题', hash: 'h', meta: null,
+      createdAt: 1, updatedAt: 2, chunkCount: 3,
+    }),
     removeDoc: ({ id }) => ({ removed: true, docId: Number(id), chunks: 2 }),
   };
   const h2 = await createHarness({ deps: { kb: fakeKb } });
@@ -433,6 +437,20 @@ test('kb：未装配内核时 docs 空数组、写接口 501；装配后可用',
   const search2 = await h2.request('POST', '/api/kb/search', { body: { botId: bot2.id, query: '原文' } });
   assert.equal(search2.status, 200);
   assert.equal(search2.data[0].mode, 'fts');
+
+  // 编辑文档（2026-11-16）：GET 详情回填 + PUT 同 source 原地 re-ingest
+  const detail = await h2.request('GET', '/api/kb/docs/7?bot=' + bot2.id);
+  assert.equal(detail.status, 200, detail.text);
+  assert.equal(detail.data.title, '常见问题');
+  assert.deepEqual(detail.data.chunks, []);
+  const update = await h2.request('PUT', '/api/kb/docs/7', {
+    body: { botId: bot2.id, title: '新标题', text: '新内容' },
+  });
+  assert.equal(update.status, 200, update.text);
+  assert.equal(update.data.docId, 7, '编辑走同 source 原地更新，docId 不变');
+  assert.equal(update.data.chunks, 2);
+  const updateEmpty = await h2.request('PUT', '/api/kb/docs/7', { body: { botId: bot2.id, text: '   ' } });
+  assert.equal(updateEmpty.status, 400, '空正文应 400');
 
   const remove2 = await h2.request('DELETE', '/api/kb/docs/7?bot=' + bot2.id);
   assert.equal(remove2.status, 200);
@@ -462,6 +480,11 @@ test('memories：未装配内核时列表可读、写接口 501；装配后可�
     }],
     save: (input) => ({ id: 2, ...input, createdAt: 3, updatedAt: 3, created: true, deduped: false }),
     search: () => [{ id: 1, text: '记忆一', score: 1, mode: 'fts' }],
+    update: ({ id, ...patch }) => ({
+      id: Number(id), botId: 'bot', peer: null, kind: patch.kind || 'fact',
+      text: patch.text || '记忆一', tags: patch.tags ?? ['a'], source: null,
+      createdAt: 1, updatedAt: 9,
+    }),
     remove: ({ id }) => ({ removed: true, id: Number(id) }),
   };
   const h2 = await createHarness({ deps: { memory: fakeMemory } });
@@ -477,6 +500,19 @@ test('memories：未装配内核时列表可读、写接口 501；装配后可�
   const search2 = await h2.request('POST', '/api/memories/search', { body: { botId: bot2.id, query: '记忆' } });
   assert.equal(search2.status, 200);
   assert.equal(search2.data[0].id, 1);
+  // 修改记忆：模型写错的长期事实可以就地修正（PUT /api/memories/:id）
+  const update2 = await h2.request('PUT', '/api/memories/1', {
+    body: { text: '群主喜欢猫', kind: 'preference', tags: '偏好, 群聊' },
+  });
+  assert.equal(update2.status, 200, update2.text);
+  assert.equal(update2.data.text, '群主喜欢猫');
+  assert.equal(update2.data.kind, 'preference');
+  assert.deepEqual(update2.data.tags, ['偏好', '群聊']);
+  const updateEmpty = await h2.request('PUT', '/api/memories/1', { body: { text: '   ' } });
+  assert.equal(updateEmpty.status, 400, '空文本应 400');
+  const updateNothing = await h2.request('PUT', '/api/memories/1', { body: {} });
+  assert.equal(updateNothing.status, 400, '没有可更新字段应 400');
+
   const remove2 = await h2.request('DELETE', '/api/memories/1');
   assert.equal(remove2.status, 200);
   assert.equal(remove2.data.ok, true);

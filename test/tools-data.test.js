@@ -22,7 +22,13 @@ test('数据工具：store 未装配时全部降级（返回空数组）', () =>
 
 test('memory_*：按 botId/peer 读写 v2 memory store', async () => {
   const saved = [];
+  const updated = [];
   const memory = {
+    update({ id, ...patch }) {
+      if (Number(id) !== 7) return null;
+      updated.push({ id: Number(id), ...patch });
+      return { id: Number(id), text: patch.text || '用户喜欢蓝色', kind: patch.kind || 'preference' };
+    },
     save(input) { saved.push(input); return { id: 7, created: true, deduped: false }; },
     search({ botId, query, limit }) {
       assert.equal(botId, 'bot-1');
@@ -44,6 +50,16 @@ test('memory_*：按 botId/peer 读写 v2 memory store', async () => {
   const found = await search.execute({ query: '蓝色' }, {});
   assert.deepEqual(found.results, [{ id: 7, text: '用户喜欢蓝色', kind: 'preference', score: 1.2 }]);
   await assert.rejects(() => search.execute({ query: '  ' }, {}), /query 不能为空/);
+
+  // memory_update：状态变化时改旧记忆，而不是再存一条
+  const update = byName(defs, 'memory_update');
+  const edited = await update.execute({ id: 7, content: '用户喜欢绿色了', kind: 'preference' }, {});
+  assert.equal(edited.ok, true);
+  assert.equal(edited.id, 7);
+  assert.deepEqual(updated[0], { id: 7, text: '用户喜欢绿色了', kind: 'preference' });
+  await assert.rejects(() => update.execute({ id: 0, content: 'x' }, {}), /id 必须是正整数/);
+  await assert.rejects(() => update.execute({ id: 7 }, {}), /至少要改一项/);
+  await assert.rejects(() => update.execute({ id: 999, content: 'x' }, {}), /记忆不存在/);
 
   const list = byName(defs, 'memory_list');
   assert.equal((await list.execute({}, {})).results.length, 1);

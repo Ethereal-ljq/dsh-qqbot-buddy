@@ -1983,3 +1983,47 @@ button.mode-card:focus-visible { outline: 2px solid var(--accent); outline-offse
   font-size: 11.5px;
 }
 
+
+/* ── 工具页：顶部统计卡 / 状态列 / 图例（2026-11-16 重构） ─── */
+.tool-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.tool-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.tool-stat:hover { background: var(--panel-hover); border-color: var(--line-strong); }
+.tool-stat.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-fade); }
+.tool-stat-value { font-family: var(--font-mono); font-size: 20px; line-height: 1.15; font-weight: 600; color: var(--ink); }
+.tool-stat-label { font-size: 11.5px; font-weight: 600; color: var(--ink-2); }
+.tool-stat-hint { font-size: 10.5px; color: var(--ink-3); line-height: 1.4; }
+
+.tool-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+.tool-legend .badge { margin-right: 3px; }
+.tool-state { display: inline-flex; flex-direction: column; gap: 1px; }
+.tool-state-reason { font-size: 10px; color: var(--ink-3); }
+
+.tool-preset { margin-left: 8px; vertical-align: 2px; font-size: 10px; font-weight: 400; }

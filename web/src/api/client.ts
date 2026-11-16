@@ -8,6 +8,7 @@
  *  - 响应统一交给 api/normalize 收敛字段。
  */
 import type {
+  KbDocDetail,
   AuditEntry, Binding, Bot, BotInput, Health, IngestResult, KbDoc, KbHit, LlmCatalog, Member, MemberInput,
   Memory, MemoryHit, MemorySaveResult, ModelSlotsPayload, Persona, PersonaInput, Profile, PromptPreview,
   PromptPreviewInput, SchemaPayload, SessionInfo, SettingsPayload, SkillPolicy, SkillsPayload, StateSnapshot,
@@ -294,6 +295,27 @@ export const api = {
     const raw = await request<unknown>('/kb/docs', { query: { bot: botId }, signal });
     return (Array.isArray(raw) ? raw : []).map(normKbDoc);
   },
+  /** 文档详情 + 分块（编辑回填）。 */
+  async getKbDoc(botId: string, id: number, signal?: AbortSignal): Promise<KbDocDetail> {
+    const raw = await request<unknown>('/kb/docs/' + id, { query: { bot: botId }, signal });
+    const detail = normKbDoc(raw);
+    const chunks = Array.isArray((raw as Record<string, unknown>)?.chunks)
+      ? ((raw as Record<string, unknown>).chunks as Array<Record<string, unknown>>).map((chunk) => ({
+        id: Number(chunk?.id) || 0,
+        ord: Number(chunk?.ord) || 0,
+        text: String(chunk?.text ?? ''),
+      }))
+      : [];
+    return { ...detail, chunks };
+  },
+  /** 编辑文档：同 source 原地 re-ingest（docId 不变，重建分块与 FTS）。 */
+  async updateKbDoc(input: { botId: string; id: number; title?: string; text: string }): Promise<IngestResult> {
+    const raw = await request<unknown>('/kb/docs/' + input.id, {
+      method: 'PUT',
+      body: { botId: input.botId, title: input.title, text: input.text },
+    });
+    return normIngest(raw);
+  },
   async deleteKbDoc(id: number, botId: string): Promise<{ ok: boolean; id: number }> {
     return request('/kb/docs/' + id, { method: 'DELETE', query: { bot: botId } });
   },
@@ -324,6 +346,10 @@ export const api = {
       created: raw?.created === undefined ? undefined : Boolean(raw.created),
       deduped: raw?.deduped === undefined ? undefined : Boolean(raw.deduped),
     };
+  },
+  async updateMemory(id: number, patch: { text?: string; kind?: string; tags?: string[] }): Promise<Memory> {
+    const raw = await request<unknown>('/memories/' + id, { method: 'PUT', body: patch });
+    return normMemory(raw);
   },
   async deleteMemory(id: number): Promise<{ ok: boolean; id: number }> {
     return request('/memories/' + id, { method: 'DELETE' });

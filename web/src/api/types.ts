@@ -255,6 +255,17 @@ export interface KbDoc {
   chunkCount: number;
 }
 
+/** 文档分块（编辑回填用；块间有少量 overlapping 文本）。 */
+export interface KbDocChunk {
+  id: number;
+  ord: number;
+  text: string;
+}
+
+export interface KbDocDetail extends KbDoc {
+  chunks: KbDocChunk[];
+}
+
 export interface KbHit {
   chunkId?: number;
   docId?: number;

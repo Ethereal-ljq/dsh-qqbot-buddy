@@ -8,7 +8,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 
 import { api, toApiError } from '../api/client';
 import type { ApiError } from '../api/client';
-import type { KbDoc, KbHit } from '../api/types';
+import type { KbDoc, KbDocDetail, KbHit } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { DataTable, type Column } from '../components/DataTable';
 import { Drawer } from '../components/Drawer';
@@ -42,6 +42,14 @@ export function KnowledgePage() {
 
   const [deleteTarget, setDeleteTarget] = useState<KbDoc | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // 编辑文档（2026-11-16）：同 source 原地 re-ingest，docId 不变；正文按分块拼回近似全文
+  const [editTarget, setEditTarget] = useState<KbDocDetail | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editText, setEditText] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
+  const [loadingEdit, setLoadingEdit] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const rows = useMemo(() => {
     const items = docs.data ?? [];
@@ -156,6 +164,49 @@ export function KnowledgePage() {
     }
   };
 
+  const openEdit = async (doc: KbDoc) => {
+    setEditError(null);
+    setLoadingEdit(true);
+    try {
+      const detail = await api.getKbDoc(botId, doc.id);
+      setEditTarget(detail);
+      setEditTitle(detail.title || '');
+      setEditText(detail.chunks.map((chunk) => chunk.text).join('\n\n'));
+    } catch (err) {
+      const error = toApiError(err);
+      notify('error', '读取文档失败：' + error.message, error.code);
+    } finally {
+      setLoadingEdit(false);
+    }
+  };
+
+  const submitEdit = async () => {
+    if (!editTarget) return;
+    if (editText.trim() === '') {
+      setEditError('文档内容不能为空。');
+      return;
+    }
+    setSavingEdit(true);
+    setEditError(null);
+    try {
+      const result = await api.updateKbDoc({
+        botId,
+        id: editTarget.id,
+        title: editTitle.trim() || undefined,
+        text: editText,
+      });
+      notify('ok', '已更新文档：' + (result.doc?.title || editTitle || ('#' + editTarget.id)) + (result.chunks ? ' · ' + result.chunks + ' 个分块' : ''));
+      setEditTarget(null);
+      docs.reload();
+      await reloadState();
+    } catch (err) {
+      const error = toApiError(err);
+      setEditError(error.unimplemented ? '知识库内核尚未装配，编辑接口返回 501。' : error.message);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const confirmDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
@@ -206,10 +257,13 @@ export function KnowledgePage() {
     {
       key: 'actions',
       title: '',
-      width: '88px',
+      width: '128px',
       align: 'right',
       render: (doc) => (
-        <button type="button" className="btn btn-sm btn-danger-text" onClick={() => setDeleteTarget(doc)}>删除</button>
+        <div className="row-actions">
+          <button type="button" className="btn btn-sm btn-ghost" disabled={loadingEdit} onClick={() => void openEdit(doc)}>编辑</button>
+          <button type="button" className="btn btn-sm btn-danger-text" onClick={() => setDeleteTarget(doc)}>删除</button>
+        </div>
       ),
     },
   ];
@@ -462,6 +516,54 @@ export function KnowledgePage() {
             <div className="note note-error" role="alert">
               <span className="note-title">{ingestError}</span>
               {ingestErrorDetail ? <span className="note-meta mono">{ingestErrorDetail}</span> : null}
+            </div>
+          ) : null}
+        </div>
+      </Drawer>
+
+      <Drawer
+        open={editTarget !== null}
+        title={'编辑文档 #' + (editTarget?.id ?? '')}
+        subtitle="同一 source 原地更新：docId 不变，分块与 FTS 索引按新内容重建。"
+        onClose={() => { if (!savingEdit) setEditTarget(null); }}
+        footer={(
+          <>
+            <button type="button" className="btn btn-ghost" disabled={savingEdit} onClick={() => setEditTarget(null)}>取消</button>
+            <button type="button" className="btn btn-primary" disabled={savingEdit} onClick={() => void submitEdit()}>
+              {savingEdit ? '保存中…' : '保存修改'}
+            </button>
+          </>
+        )}
+      >
+        <div className="form-stack">
+          <div className="hint-strip">
+            <span className="hint-label">说明</span>
+            <span className="hint-text">
+              原文不存库，打开时按分块拼回（块边界可能有少量重叠）；保存后以这里的文本为准重建分块。
+              改标题不改 source，重复入库仍会命中同一篇文档。
+            </span>
+          </div>
+          <Field label="标题" htmlFor="kb-edit-title">
+            <input
+              id="kb-edit-title"
+              className="input"
+              value={editTitle}
+              placeholder="文档标题"
+              onChange={(event) => setEditTitle(event.target.value)}
+            />
+          </Field>
+          <Field label="内容（Markdown / 纯文本）" htmlFor="kb-edit-text" required wide>
+            <textarea
+              id="kb-edit-text"
+              className="input textarea mono kb-textarea"
+              rows={14}
+              value={editText}
+              onChange={(event) => setEditText(event.target.value)}
+            />
+          </Field>
+          {editError ? (
+            <div className="note note-error" role="alert">
+              <span className="note-title">{editError}</span>
             </div>
           ) : null}
         </div>

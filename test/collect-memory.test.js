@@ -13,6 +13,7 @@ import {
   TRANSCRIPT_MAX_CHARS,
   buildCollectPrompt,
   createMemoryCollector,
+  isTransientToolNoise,
   parseFacts,
   readMemorySettings,
   tailTranscript,
@@ -492,6 +493,46 @@ test('同一条记忆已存在时走近似去重，只刷新不新增', async (t
   assert.equal(result.created, 0);
   assert.equal(result.deduped, 1);
   assert.equal(memory.list({ botId: 'bot-a' }).length, 1);
+});
+
+test('状态变化：近似去重命中时用新文本覆盖旧记忆，而不是新增一条（2026-11-16）', async (t) => {
+  const { memory, db } = setup(t);
+  memory.save({ botId: 'bot-a', peer: 'group:1', text: '用户计划这周六上午开车去西安玩两天顺便吃火锅', kind: 'event' });
+  const oneShot = fakeOneShot(() => ({ ok: true, text: '{"text":"用户计划这周日上午开车去西安玩两天顺便吃火锅","kind":"event"}' }));
+  const collector = makeCollector({ memory, db, oneShot });
+  const result = await collector.collectNow({ botId: 'bot-a', peer: 'group:1', transcript: '对话' });
+  assert.equal(result.ok, true);
+  assert.equal(result.created, 0);
+  assert.equal(result.deduped, 1);
+  const rows = memory.list({ botId: 'bot-a' });
+  assert.equal(rows.length, 1, '状态变化不应新增第二条');
+  assert.equal(rows[0].text, '用户计划这周日上午开车去西安玩两天顺便吃火锅', '应覆盖旧文本为最新状态');
+});
+
+test('parseFacts 过滤「工具故障」噪声（2026-11-16 线上事故回归）', () => {
+  // 自动提炼曾把「生图工具报错」写成长期事实，之后每次召回都在告诉模型「这个能力坏了」
+  const noise = [
+    '生图工具挂载存在问题，调用时提示不存在，需要修路由',
+    '助手的生图功能当前报错未修复',
+    '助手生图功能持续报错不可用，只能翻资料、发文件、存表情和发语音',
+    '助手具备生图/改图能力，但工具挂载存在路由未刷新的调用问题',
+    '助手的生图工具曾出现无响应故障',
+    'generate_image 报 unknown tool，需要重启',
+  ];
+  for (const text of noise) assert.equal(isTransientToolNoise(text), true, '应判定为噪声: ' + text);
+  const keep = [
+    '助手在群内提供生图功能，群友常点名生成指定主题的图',
+    '群主喜欢用表情包回复',
+    '用户周五晚上常和朋友吃火锅',
+    '助手支持语音收听功能，使用的是官方 ASR',
+  ];
+  for (const text of keep) assert.equal(isTransientToolNoise(text), false, '不应误杀: ' + text);
+  // parseFacts 入库前兜底过滤；正常事实保留
+  const parsed = parseFacts([
+    '{"text":"生图工具报错，路由没刷新","kind":"fact"}',
+    '{"text":"群主喜欢猫","kind":"preference"}',
+  ].join('\n'));
+  assert.deepEqual(parsed, [{ text: '群主喜欢猫', kind: 'preference' }]);
 });
 
 test('parseFacts 纯函数：数组 / facts 包装 / 超长截断 / 条数上限', () => {

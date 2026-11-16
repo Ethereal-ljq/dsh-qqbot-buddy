@@ -97,6 +97,44 @@ test('不可用：能力关闭 / 黑名单 / 白名单外', () => {
   assert.match(notAllowed.reason, /不在白名单/);
 });
 
+test('全局工具（画布/工作目录）：按需档 → 待唤醒；没有分组 → 不可用；常驻档才每轮发送', () => {
+  const indexed = toolStateOf({
+    settings: CAPS(), name: 'canvas_state', source: 'host', tier: 'passive', group: 'canvas', restrictable: true,
+  });
+  assert.equal(indexed.state, 'indexed', '画布工具不在 schema 里，不能标每轮发送');
+  assert.equal(indexed.declared, false);
+  assert.equal(indexed.indexed, true);
+
+  const noGroup = toolStateOf({
+    settings: CAPS(), name: 'working_directory', source: 'host', tier: 'passive', group: null, restrictable: true,
+  });
+  assert.equal(noGroup.state, 'disabled');
+  assert.match(noGroup.reason, /常驻/);
+
+  const active = toolStateOf({
+    settings: CAPS(), name: 'canvas_state', source: 'host', tier: 'active', group: 'canvas', restrictable: true,
+  });
+  assert.equal(active.state, 'declared');
+
+  const scopeLocal = toolStateOf({
+    settings: CAPS(), name: 'some_plugin_tool', source: 'plugin', tier: 'passive', restrictable: false,
+  });
+  assert.equal(scopeLocal.state, 'declared', 'agent scope 自带工具不受 restrict 影响');
+});
+
+test('qqbot_enable：force 注册，不在白名单也算每轮发送；显式 deny 才屏蔽', () => {
+  const allowMode = { tools: { mode: 'allow', allow: ['qqbot_send_file'] } };
+  const meta = toolStateOf({ settings: allowMode, name: 'qqbot_enable', source: 'qqbot', tier: 'active' });
+  assert.equal(meta.state, 'declared');
+
+  const denied = toolStateOf({ settings: { tools: { deny: ['qqbot_enable'] } }, name: 'qqbot_enable', source: 'qqbot', tier: 'active' });
+  assert.equal(denied.state, 'disabled');
+  assert.match(denied.reason, /黑名单/);
+
+  const team = toolStateOf({ settings: allowMode, name: 'team_task_create', source: 'host', tier: 'active' });
+  assert.equal(team.state, 'disabled', '普通工具仍按白名单判定');
+});
+
 test('没有配置档时三态都是 unknown（控制台不瞎标）', () => {
   const state = toolStateOf({ settings: null, name: 'read', source: 'host' });
   assert.equal(state.state, 'unknown');

@@ -70,6 +70,12 @@ export function MemoryPage() {
   const [deleteTarget, setDeleteTarget] = useState<Memory | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // 编辑（PUT /api/memories/:id）：模型写错的记忆可以就地修正，而不是只能删除
+  const [editTarget, setEditTarget] = useState<Memory | null>(null);
+  const [editForm, setEditForm] = useState({ text: '', kind: 'fact', tags: '' });
+  const [editError, setEditError] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+
   // 立即提炼（/api/actions/extract：旁路 LLM 从转录抽长期事实）
   const [extractOpen, setExtractOpen] = useState(false);
   const [extractPeer, setExtractPeer] = useState('');
@@ -192,6 +198,34 @@ export function MemoryPage() {
     }
   };
 
+  const openEdit = (memory: Memory) => {
+    setEditTarget(memory);
+    setEditForm({ text: memory.text, kind: memory.kind || 'fact', tags: tagsOf(memory).join(', ') });
+    setEditError(null);
+  };
+
+  const submitEdit = async () => {
+    if (!editTarget) return;
+    const text = editForm.text.trim();
+    if (text === '') {
+      setEditError('记忆内容不能为空。');
+      return;
+    }
+    setSavingEdit(true);
+    setEditError(null);
+    try {
+      const tags = editForm.tags.split(/[,，\s]+/).map((part) => part.trim()).filter(Boolean);
+      await api.updateMemory(editTarget.id, { text, kind: editForm.kind, tags });
+      notify('ok', '已更新记忆 #' + editTarget.id);
+      setEditTarget(null);
+      memories.reload();
+    } catch (err) {
+      setEditError(toApiError(err).message);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const confirmDelete = async () => {
     if (!deleteTarget) return;
     setDeleting(true);
@@ -250,10 +284,13 @@ export function MemoryPage() {
     {
       key: 'actions',
       title: '',
-      width: '80px',
+      width: '128px',
       align: 'right',
       render: (memory) => (
-        <button type="button" className="btn btn-sm btn-danger-text" onClick={() => setDeleteTarget(memory)}>删除</button>
+        <div className="row-actions">
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => openEdit(memory)}>编辑</button>
+          <button type="button" className="btn btn-sm btn-danger-text" onClick={() => setDeleteTarget(memory)}>删除</button>
+        </div>
       ),
     },
   ];
@@ -509,6 +546,55 @@ export function MemoryPage() {
             </Field>
           </div>
           {createError ? <p className="field-error" role="alert">{createError}</p> : null}
+        </div>
+      </Drawer>
+
+      <Drawer
+        open={editTarget !== null}
+        title={'编辑记忆 #' + (editTarget?.id ?? '')}
+        subtitle="模型写错的记忆可以就地修正措辞/类型/标签；id、来源会话与创建时间保留。"
+        onClose={() => { if (!savingEdit) setEditTarget(null); }}
+        footer={(
+          <>
+            <button type="button" className="btn btn-ghost" disabled={savingEdit} onClick={() => setEditTarget(null)}>取消</button>
+            <button type="button" className="btn btn-primary" disabled={savingEdit} onClick={() => void submitEdit()}>
+              {savingEdit ? '保存中…' : '保存修改'}
+            </button>
+          </>
+        )}
+      >
+        <div className="form-stack">
+          <Field label="记忆内容" htmlFor="memory-edit-text" required wide help="改成稳定、准确的一句话；技术故障类临时状态不应写成长期记忆。">
+            <textarea
+              id="memory-edit-text"
+              className="input textarea"
+              rows={4}
+              value={editForm.text}
+              onChange={(event) => setEditForm({ ...editForm, text: event.target.value })}
+            />
+          </Field>
+          <div className="form-row">
+            <Field label="类型" htmlFor="memory-edit-kind">
+              <select
+                id="memory-edit-kind"
+                className="input"
+                value={editForm.kind}
+                onChange={(event) => setEditForm({ ...editForm, kind: event.target.value })}
+              >
+                {Object.entries(KIND_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </Field>
+            <Field label="标签 tags" htmlFor="memory-edit-tags" help="逗号分隔，可留空。">
+              <input
+                id="memory-edit-tags"
+                className="input mono"
+                value={editForm.tags}
+                placeholder="偏好, 群聊"
+                onChange={(event) => setEditForm({ ...editForm, tags: event.target.value })}
+              />
+            </Field>
+          </div>
+          {editError ? <p className="field-error" role="alert">{editError}</p> : null}
         </div>
       </Drawer>
 
