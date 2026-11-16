@@ -401,6 +401,14 @@ export function normKbDoc(raw: unknown): KbDoc {
     createdAt,
     updatedAt: num(val(r, 'updatedAt', 'updated_at'), createdAt),
     chunkCount: num(val(r, 'chunkCount', 'chunk_count')),
+    kind: val(r, 'kind') === undefined || val(r, 'kind') === null || val(r, 'kind') === '' ? null : str(val(r, 'kind')) as KbDoc['kind'],
+    confidence: val(r, 'confidence') === undefined || val(r, 'confidence') === null ? null : num(val(r, 'confidence')),
+    authority: val(r, 'authority') === undefined || val(r, 'authority') === null || val(r, 'authority') === '' ? null : str(val(r, 'authority')) as KbDoc['authority'],
+    pinned: Boolean(val(r, 'pinned')),
+    recallCount: num(val(r, 'recallCount', 'recall_count'), 0),
+    lastRecalledAt: val(r, 'lastRecalledAt', 'last_recalled_at') === undefined || val(r, 'lastRecalledAt', 'last_recalled_at') === null ? null : num(val(r, 'lastRecalledAt', 'last_recalled_at')),
+    staleAt: val(r, 'staleAt', 'stale_at') === undefined || val(r, 'staleAt', 'stale_at') === null ? null : num(val(r, 'staleAt', 'stale_at')),
+    staleReason: val(r, 'staleReason', 'stale_reason') === undefined || val(r, 'staleReason', 'stale_reason') === null ? null : str(val(r, 'staleReason', 'stale_reason')),
   };
 }
 

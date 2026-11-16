@@ -253,7 +253,24 @@ export interface KbDoc {
   createdAt: number;
   updatedAt: number;
   chunkCount: number;
+  /** 知识分类：meme/fact/lookup/rule/other；null = 历史未分类 */
+  kind?: KbKind | null;
+  /** 置信度 0-100（null = 历史未分类数据） */
+  confidence?: number | null;
+  /** 来源权威：admin/member/model/external */
+  authority?: KbAuthority | null;
+  /** 保护位：pinned 文档每轮注入且永不自动清理 */
+  pinned?: boolean;
+  /** 召回次数（治理用） */
+  recallCount?: number;
+  lastRecalledAt?: number | null;
+  /** 软归档时间（非空 = 已归档，可恢复） */
+  staleAt?: number | null;
+  staleReason?: string | null;
 }
+
+export type KbKind = 'meme' | 'fact' | 'lookup' | 'rule' | 'other';
+export type KbAuthority = 'admin' | 'member' | 'model' | 'external';
 
 /** 文档分块（编辑回填用；块间有少量 overlapping 文本）。 */
 export interface KbDocChunk {

@@ -2,6 +2,21 @@
 
 本项目遵循语义化版本；当前处于 `1.0.0` 的预发布阶段。发布先落 `next`，验收通过后提升 `latest`。
 
+## 1.0.1-alpha.2（2026-11-16，仅本地 commit，未发布）
+
+### 新增：知识库分类 / 置信度 / 治理（可调阈值）
+
+- 知识分类 `kind`：`meme`（梗/角色/黑话）/ `fact`（定义/事实）/ `lookup`（查证资料）/
+  `rule`（真·群规）/ `other`，`knowledge_save` 新增 `kind/confidence/authority/sourceUrl/fetchedAt/pinned` 参数，
+  source 自动拼成 `kb:<kind>:<slug>`，同主题原地覆盖。
+- 治理元数据落库（migration v12）：`kind/confidence/authority/pinned/recall_count/last_recalled_at/stale_at/stale_reason`。
+- **保护位优先**：`pinned` / `kind=rule` / `authority=member|admin` / 历史未分类（v1 迁移）永远不参与自动清理；
+  群友写的群规/梗默认 `pinned=1`，并每轮注入（`【常驻知识】`，预算 `kb.pinnedInjectChars`），不依赖召回率。
+- 召回统计：`kb.search` 命中时给文档记召回（1 小时节流），供治理判断热度。
+- 知识治理 `kb.hygiene`：置信度低 + 召回少的知识软归档（可恢复），归档满 `kb.archiveTtlDays` 再物理删除；
+  默认阈值全部调短：置信度阈值 40 / 零召回观察 14 天 / 冷召回观察 45 天 / 归档保留 **7 天**，均可在「配置档 → 知识库」调整。
+- 控制台知识库页：分类/置信度/召回/保护位列，分类筛选、显示已归档、「知识体检」（先干跑预览再执行）、恢复归档。
+
 ## 1.0.1-alpha.1（2026-11-16，仅本地 commit，未发布）
 
 这一版把 11-14 以来的修复与重构收进一个可回滚的提交（暂不 push、不 npm publish）。

@@ -291,9 +291,25 @@ export const api = {
   },
 
   // 知识库
-  async listKbDocs(botId: string, signal?: AbortSignal): Promise<KbDoc[]> {
-    const raw = await request<unknown>('/kb/docs', { query: { bot: botId }, signal });
+  async listKbDocs(
+    botId: string,
+    options: { includeArchived?: boolean; kind?: string } = {},
+    signal?: AbortSignal,
+  ): Promise<KbDoc[]> {
+    const raw = await request<unknown>('/kb/docs', {
+      query: { bot: botId, archived: options.includeArchived ? '1' : undefined, kind: options.kind },
+      signal,
+    });
     return (Array.isArray(raw) ? raw : []).map(normKbDoc);
+  },
+  /** 只改治理元数据（分类 / 置信度 / 权威 / 保护位 / 归档 / 恢复），不动正文与分块。 */
+  async updateKbDocMeta(id: number, input: { botId: string; kind?: string; confidence?: number; authority?: string; pinned?: boolean; stale?: boolean; sourceUrl?: string; fetchedAt?: string }): Promise<KbDoc | null> {
+    const raw = await request<{ doc?: unknown }>('/kb/docs/' + id + '/meta', { method: 'POST', body: input });
+    return raw && raw.doc ? normKbDoc(raw.doc) : null;
+  },
+  /** 知识治理：dryRun=true 只预览候选，false 执行软归档 + 清理超 TTL 归档。 */
+  async runKbHygiene(input: { botId: string; dryRun: boolean }): Promise<{ archive: Array<{ id: number; title: string; reason: string }>; purge: Array<{ id: number; title: string }>; scanned: number; archived?: number; purged?: number }> {
+    return request('/kb/hygiene', { method: 'POST', body: input });
   },
   /** 文档详情 + 分块（编辑回填）。 */
   async getKbDoc(botId: string, id: number, signal?: AbortSignal): Promise<KbDocDetail> {
@@ -309,7 +325,7 @@ export const api = {
     return { ...detail, chunks };
   },
   /** 编辑文档：同 source 原地 re-ingest（docId 不变，重建分块与 FTS）。 */
-  async updateKbDoc(input: { botId: string; id: number; title?: string; text: string }): Promise<IngestResult> {
+  async updateKbDoc(input: { botId: string; id: number; title?: string; text: string; kind?: string; confidence?: number; authority?: string; pinned?: boolean; sourceUrl?: string; fetchedAt?: string }): Promise<IngestResult> {
     const raw = await request<unknown>('/kb/docs/' + input.id, {
       method: 'PUT',
       body: { botId: input.botId, title: input.title, text: input.text },

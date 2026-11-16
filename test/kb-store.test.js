@@ -218,3 +218,52 @@ test('LIKE 回退时通配符按字面匹配（% 与 _ 被转义）', (t) => {
   assert.equal(underscore.length, 1);
   assert.match(underscore[0].text, /a_b/);
 });
+
+test('治理元数据：kind/confidence/authority/pinned 落库，同 source 更新保留分类', (t) => {
+  const { kb } = setup(t);
+  const first = kb.ingest({
+    botId: 'bot-a', source: 'kb:meme:manbo', title: '梗｜曼波 → 曼神', text: '提到曼波就喊曼神。',
+    kind: 'meme', authority: 'member',
+  });
+  const doc = kb.getDoc({ botId: 'bot-a', docId: first.docId });
+  assert.equal(doc.kind, 'meme');
+  assert.equal(doc.authority, 'member');
+  assert.equal(doc.confidence, 88, 'member 来源默认高置信');
+  assert.equal(doc.pinned, false);
+
+  // 同 source 改内容但不传 kind：分类/置信度要保留
+  kb.ingest({ botId: 'bot-a', source: 'kb:meme:manbo', title: '梗｜曼波 → 曼神', text: '提到曼波就喊「曼神」。' });
+  const after = kb.getDoc({ botId: 'bot-a', docId: first.docId });
+  assert.equal(after.kind, 'meme');
+  assert.equal(after.confidence, 88);
+
+  // rule 默认 pinned
+  const rule = kb.ingest({ botId: 'bot-a', source: 'kb:rule:no-spam', title: '规则｜禁止刷屏', text: '禁止刷屏', kind: 'rule', authority: 'admin' });
+  assert.equal(kb.getDoc({ botId: 'bot-a', docId: rule.docId }).pinned, true);
+  assert.equal(kb.getDoc({ botId: 'bot-a', docId: rule.docId }).confidence, 95);
+});
+
+test('召回统计 + 归档/恢复 + 常驻清单', (t) => {
+  const { kb } = setup(t);
+  const a = kb.ingest({ botId: 'bot-a', source: 'kb:fact:a', title: '定义｜A 是什么', text: 'A 是苹果。', kind: 'fact', confidence: 50 });
+  kb.search({ botId: 'bot-a', query: '苹果' });
+  const hit = kb.getDoc({ botId: 'bot-a', docId: a.docId });
+  assert.equal(hit.recallCount, 1, '检索命中记一次召回');
+  assert.ok(hit.lastRecalledAt > 0);
+
+  kb.updateDocMeta({ botId: 'bot-a', id: a.docId, patch: { stale: true, staleReason: '测试归档' } });
+  assert.ok(kb.getDoc({ botId: 'bot-a', docId: a.docId }).staleAt > 0);
+  assert.equal(kb.search({ botId: 'bot-a', query: '苹果' }).length, 0, '归档文档不参与检索');
+  assert.equal(kb.listDocs({ botId: 'bot-a' }).length, 0);
+  assert.equal(kb.listDocs({ botId: 'bot-a', includeArchived: true }).length, 1);
+
+  kb.updateDocMeta({ botId: 'bot-a', id: a.docId, patch: { stale: false } });
+  assert.equal(kb.getDoc({ botId: 'bot-a', docId: a.docId }).staleAt, null);
+
+  const rule = kb.ingest({ botId: 'bot-a', source: 'kb:rule:r1', title: '规则｜只许短句', text: '只许短句', kind: 'rule' });
+  const pinned = kb.listPinned({ botId: 'bot-a', maxChars: 200 });
+  assert.match(pinned.text, /常驻知识/);
+  assert.match(pinned.text, /规则/);
+  assert.deepEqual(pinned.ids, [rule.docId]);
+});
+

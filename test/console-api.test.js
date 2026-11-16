@@ -418,6 +418,15 @@ test('kb：未装配内核时 docs 空数组、写接口 501；装配后可用',
       id: Number(docId), botId: 'x', source: 'faq.md', title: '常见问题', hash: 'h', meta: null,
       createdAt: 1, updatedAt: 2, chunkCount: 3,
     }),
+    updateDocMeta: ({ botId: id, id: docId, patch }) => ({
+      updated: true,
+      doc: {
+        id: Number(docId), botId: id, source: 'faq.md', title: '常见问题', kind: patch.kind || 'fact',
+        confidence: patch.confidence ?? 40, authority: patch.authority || 'model', pinned: Boolean(patch.pinned),
+        staleAt: patch.stale ? 123 : null, recallCount: 0, createdAt: 1, updatedAt: 2, chunkCount: 3,
+      },
+    }),
+    purgeArchived: () => ({ purged: 0 }),
     removeDoc: ({ id }) => ({ removed: true, docId: Number(id), chunks: 2 }),
   };
   const h2 = await createHarness({ deps: { kb: fakeKb } });
@@ -451,6 +460,22 @@ test('kb：未装配内核时 docs 空数组、写接口 501；装配后可用',
   assert.equal(update.data.chunks, 2);
   const updateEmpty = await h2.request('PUT', '/api/kb/docs/7', { body: { botId: bot2.id, text: '   ' } });
   assert.equal(updateEmpty.status, 400, '空正文应 400');
+
+  // 治理元数据：保护位/分类/置信度（POST /api/kb/docs/:id/meta），不需要正文
+  const meta = await h2.request('POST', '/api/kb/docs/7/meta', {
+    body: { botId: bot2.id, pinned: true, kind: 'meme', confidence: 88, authority: 'member' },
+  });
+  assert.equal(meta.status, 200, meta.text);
+  assert.equal(meta.data.doc.pinned, true);
+  assert.equal(meta.data.doc.kind, 'meme');
+  const metaEmpty = await h2.request('POST', '/api/kb/docs/7/meta', { body: { botId: bot2.id } });
+  assert.equal(metaEmpty.status, 400, '没有可更新字段应 400');
+
+  // 知识体检：dryRun 返回候选（假内核对全部文档按保护位规则计算）
+  const hygiene = await h2.request('POST', '/api/kb/hygiene', { body: { botId: bot2.id, dryRun: true } });
+  assert.equal(hygiene.status, 200, hygiene.text);
+  assert.equal(hygiene.data.dryRun, true);
+  assert.ok(Array.isArray(hygiene.data.archive));
 
   const remove2 = await h2.request('DELETE', '/api/kb/docs/7?bot=' + bot2.id);
   assert.equal(remove2.status, 200);

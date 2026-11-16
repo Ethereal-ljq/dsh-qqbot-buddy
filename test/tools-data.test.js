@@ -80,8 +80,20 @@ test('knowledge_*：knowledge_save 幂等入库 / knowledge_search / knowledge_r
   const defs = createDataTools({ kb, botId: 'bot-1', manager, logger: silentLogger });
   const saved = await byName(defs, 'knowledge_save').execute({ title: '群规', content: '禁止刷屏' }, {});
   assert.equal(saved.docId, 3);
-  assert.deepEqual(ingested[0], { botId: 'bot-1', source: 'tool:群规', title: '群规', text: '禁止刷屏' });
+  assert.deepEqual(ingested[0], { botId: 'bot-1', source: 'kb:other:群规', title: '群规', text: '禁止刷屏', kind: 'other', authority: 'model' });
   await assert.rejects(() => byName(defs, 'knowledge_save').execute({ title: '', content: 'x' }, {}), /title\/content/);
+  // knowledge_save 分类：kind 自动拼 source、authority 决定置信度、rule 自动 pinned
+  const saveKb = byName(defs, 'knowledge_save');
+  const savedMeme = await saveKb.execute({ title: '梗｜曼波', content: '提到曼波就喊曼神', kind: 'meme', authority: 'member' }, {});
+  assert.equal(savedMeme.ok, true);
+  assert.equal(savedMeme.kind, 'meme');
+  assert.equal(savedMeme.pinned, false);
+  assert.equal(ingested.at(-1).source, 'kb:meme:梗｜曼波');
+  assert.equal(ingested.at(-1).kind, 'meme');
+  assert.equal(ingested.at(-1).authority, 'member');
+  const savedRule = await saveKb.execute({ title: '规则｜禁止刷屏', content: '禁止刷屏', kind: 'rule', authority: 'admin' }, {});
+  assert.equal(savedRule.pinned, true);
+
   const found = await byName(defs, 'knowledge_search').execute({ query: '刷屏' }, {});
   assert.equal(found.results[0].title, '群规');
   const doc = await byName(defs, 'knowledge_read').execute({ id: 3 }, {});

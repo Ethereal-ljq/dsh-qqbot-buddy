@@ -23,9 +23,21 @@ import { navigate } from '../router';
 import { useApp } from '../state/AppContext';
 import { useApi } from '../state/useApi';
 
+const KB_KIND_LABEL: Record<string, string> = { meme: '梗', fact: '事实', lookup: '查证', rule: '群规', other: '其他' };
+const KB_AUTHORITY_LABEL: Record<string, string> = { admin: '管理员', member: '群友', model: '模型', external: '外部' };
+
+function kindLabelOf(kind?: string | null): string {
+  return kind ? (KB_KIND_LABEL[kind] || kind) : '未分类';
+}
+
 export function KnowledgePage() {
   const { botId, bots, bot, notify, reloadState } = useApp();
-  const docs = useApi((signal) => (botId ? api.listKbDocs(botId, signal) : Promise.resolve([])), [botId]);
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [kindFilter, setKindFilter] = useState('');
+  const docs = useApi(
+    (signal) => (botId ? api.listKbDocs(botId, { includeArchived, kind: kindFilter || undefined }, signal) : Promise.resolve([])),
+    [botId, includeArchived, kindFilter],
+  );
   const [filter, setFilter] = useState('');
 
   const [query, setQuery] = useState('');
@@ -45,11 +57,17 @@ export function KnowledgePage() {
 
   // 编辑文档（2026-11-16）：同 source 原地 re-ingest，docId 不变；正文按分块拼回近似全文
   const [editTarget, setEditTarget] = useState<KbDocDetail | null>(null);
-  const [editTitle, setEditTitle] = useState('');
-  const [editText, setEditText] = useState('');
+  const [editForm, setEditForm] = useState({
+    title: '', text: '', kind: 'fact', confidence: 50, authority: 'model', pinned: false, sourceUrl: '', fetchedAt: '',
+  });
   const [editError, setEditError] = useState<string | null>(null);
   const [loadingEdit, setLoadingEdit] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // 知识治理（2026-11-16）：dry-run 预览 → 执行软归档；阈值在「配置档 → 知识库」里调。
+  const [hygieneBusy, setHygieneBusy] = useState(false);
+  const [hygienePreview, setHygienePreview] = useState<{ archive: Array<{ id: number; title: string; reason: string }>; purge: Array<{ id: number; title: string }> } | null>(null);
+  const [hygieneNotice, setHygieneNotice] = useState('');
 
   const rows = useMemo(() => {
     const items = docs.data ?? [];
@@ -170,8 +188,16 @@ export function KnowledgePage() {
     try {
       const detail = await api.getKbDoc(botId, doc.id);
       setEditTarget(detail);
-      setEditTitle(detail.title || '');
-      setEditText(detail.chunks.map((chunk) => chunk.text).join('\n\n'));
+      setEditForm({
+        title: detail.title || '',
+        text: detail.chunks.map((chunk) => chunk.text).join(String.fromCharCode(10, 10)),
+        kind: detail.kind || 'fact',
+        confidence: detail.confidence ?? 50,
+        authority: detail.authority || 'model',
+        pinned: Boolean(detail.pinned),
+        sourceUrl: String(detail.meta && detail.meta.sourceUrl ? detail.meta.sourceUrl : ''),
+        fetchedAt: String(detail.meta && detail.meta.fetchedAt ? detail.meta.fetchedAt : ''),
+      });
     } catch (err) {
       const error = toApiError(err);
       notify('error', '读取文档失败：' + error.message, error.code);
@@ -182,7 +208,7 @@ export function KnowledgePage() {
 
   const submitEdit = async () => {
     if (!editTarget) return;
-    if (editText.trim() === '') {
+    if (editForm.text.trim() === '') {
       setEditError('文档内容不能为空。');
       return;
     }
@@ -192,10 +218,16 @@ export function KnowledgePage() {
       const result = await api.updateKbDoc({
         botId,
         id: editTarget.id,
-        title: editTitle.trim() || undefined,
-        text: editText,
+        title: editForm.title.trim() || undefined,
+        text: editForm.text,
+        kind: editForm.kind,
+        confidence: editForm.confidence,
+        authority: editForm.authority,
+        pinned: editForm.pinned,
+        sourceUrl: editForm.sourceUrl.trim() || undefined,
+        fetchedAt: editForm.fetchedAt.trim() || undefined,
       });
-      notify('ok', '已更新文档：' + (result.doc?.title || editTitle || ('#' + editTarget.id)) + (result.chunks ? ' · ' + result.chunks + ' 个分块' : ''));
+      notify('ok', '已更新文档：' + (result.doc?.title || editForm.title || ('#' + editTarget.id)) + (result.chunks ? ' · ' + result.chunks + ' 个分块' : ''));
       setEditTarget(null);
       docs.reload();
       await reloadState();
@@ -204,6 +236,58 @@ export function KnowledgePage() {
       setEditError(error.unimplemented ? '知识库内核尚未装配，编辑接口返回 501。' : error.message);
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  /** 保护位开关（pinned）：不重建分块，只改元数据。 */
+  const togglePin = async (doc: KbDoc) => {
+    try {
+      await api.updateKbDocMeta(doc.id, { botId, pinned: !doc.pinned });
+      notify('ok', (!doc.pinned ? '已设为常驻知识' : '已取消常驻') + '：' + (doc.title || doc.source));
+      docs.reload();
+    } catch (err) {
+      notify('error', '修改保护位失败：' + toApiError(err).message);
+    }
+  };
+
+  /** 从归档恢复。 */
+  const restoreDoc = async (doc: KbDoc) => {
+    try {
+      await api.updateKbDocMeta(doc.id, { botId, stale: false });
+      notify('ok', '已恢复：' + (doc.title || doc.source));
+      docs.reload();
+    } catch (err) {
+      notify('error', '恢复失败：' + toApiError(err).message);
+    }
+  };
+
+  /** 知识体检：先 dry-run 预览，再确认执行。 */
+  const previewHygiene = async () => {
+    setHygieneBusy(true);
+    setHygieneNotice('');
+    try {
+      const result = await api.runKbHygiene({ botId, dryRun: true });
+      setHygienePreview({ archive: result.archive || [], purge: result.purge || [] });
+    } catch (err) {
+      const error = toApiError(err);
+      notify(error.unimplemented ? 'info' : 'error', '知识体检失败：' + error.message);
+    } finally {
+      setHygieneBusy(false);
+    }
+  };
+
+  const applyHygiene = async () => {
+    setHygieneBusy(true);
+    try {
+      const result = await api.runKbHygiene({ botId, dryRun: false });
+      setHygieneNotice('已归档 ' + (result.archived || 0) + ' 篇，清理 ' + (result.purged || 0) + ' 篇（归档保留期内可在「显示已归档」里恢复）');
+      notify('ok', '知识治理完成：归档 ' + (result.archived || 0) + ' · 清理 ' + (result.purged || 0));
+      setHygienePreview(null);
+      docs.reload();
+    } catch (err) {
+      notify('error', '知识治理失败：' + toApiError(err).message);
+    } finally {
+      setHygieneBusy(false);
     }
   };
 
@@ -230,38 +314,68 @@ export function KnowledgePage() {
       title: '文档',
       render: (doc) => (
         <div className="cell-stack">
-          <span className="cell-title">{doc.title || doc.source || '（未命名）'}</span>
+          <span className="cell-inline">
+            <span className="cell-title">{doc.title || doc.source || '（未命名）'}</span>
+            <span className={'badge ' + (doc.kind === 'rule' ? 'info' : doc.kind === 'meme' ? 'warn' : 'idle')}>{kindLabelOf(doc.kind)}</span>
+            {doc.pinned ? <span className="badge ok" title="常驻：每轮注入，且不参与自动清理">常驻</span> : null}
+            {doc.staleAt ? <span className="badge danger" title={doc.staleReason || ''}>已归档</span> : null}
+          </span>
           <span className="mono cell-sub ellipsis" title={doc.source}>{truncate(doc.source, 90)}</span>
         </div>
       ),
     },
     {
-      key: 'chunks',
-      title: '分块',
-      width: '80px',
-      align: 'right',
-      render: (doc) => <span className="mono">{fmtNumber(doc.chunkCount)}</span>,
+      key: 'confidence',
+      title: '置信度',
+      width: '104px',
+      render: (doc) => (
+        <div className="cell-stack">
+          <span className="mono">{doc.confidence === null || doc.confidence === undefined ? '—' : doc.confidence}</span>
+          <span className="cell-sub">{doc.authority ? (KB_AUTHORITY_LABEL[doc.authority] || doc.authority) : '未标注'}</span>
+        </div>
+      ),
     },
     {
-      key: 'hash',
-      title: '内容指纹',
-      width: '140px',
-      render: (doc) => <span className="mono cell-sub">{doc.hash ? doc.hash.slice(0, 12) : '—'}</span>,
+      key: 'recall',
+      title: '召回',
+      width: '72px',
+      align: 'right',
+      render: (doc) => <span className="mono" title={doc.lastRecalledAt ? '最近召回 ' + fmtTimeSmart(doc.lastRecalledAt) : '从未被召回'}>{fmtNumber(doc.recallCount || 0)}</span>,
+    },
+    {
+      key: 'protection',
+      title: '保护',
+      width: '86px',
+      align: 'center',
+      render: (doc) => (
+        <button
+          type="button"
+          className={'btn btn-sm ' + (doc.pinned ? 'btn-primary' : 'btn-ghost')}
+          title={doc.pinned ? '常驻 + 不参与自动清理；点击取消' : '设为常驻（每轮注入、永不自动清理）'}
+          onClick={() => void togglePin(doc)}
+        >
+          {doc.staleAt ? '—' : doc.pinned ? '常驻' : '设常驻'}
+        </button>
+      ),
     },
     {
       key: 'updatedAt',
       title: '更新时间',
-      width: '140px',
+      width: '128px',
       render: (doc) => <span className="mono cell-sub">{fmtTimeSmart(doc.updatedAt || doc.createdAt)}</span>,
     },
     {
       key: 'actions',
       title: '',
-      width: '128px',
+      width: '132px',
       align: 'right',
       render: (doc) => (
         <div className="row-actions">
-          <button type="button" className="btn btn-sm btn-ghost" disabled={loadingEdit} onClick={() => void openEdit(doc)}>编辑</button>
+          {doc.staleAt ? (
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => void restoreDoc(doc)}>恢复</button>
+          ) : (
+            <button type="button" className="btn btn-sm btn-ghost" disabled={loadingEdit} onClick={() => void openEdit(doc)}>编辑</button>
+          )}
           <button type="button" className="btn btn-sm btn-danger-text" onClick={() => setDeleteTarget(doc)}>删除</button>
         </div>
       ),
@@ -382,10 +496,56 @@ export function KnowledgePage() {
                 onChange={(event) => setFilter(event.target.value)}
               />
             </label>
+            <div className="segmented" role="group" aria-label="按分类筛选">
+              {([['', '全部'], ['meme', '梗'], ['fact', '事实'], ['lookup', '查证'], ['rule', '群规'], ['other', '其他']] as Array<[string, string]>).map(([id, label]) => (
+                <button
+                  key={id || 'all'}
+                  type="button"
+                  className={'seg-btn' + (kindFilter === id ? ' active' : '')}
+                  onClick={() => setKindFilter(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <label className="toolbar-field">
+              <span className="toolbar-label">归档</span>
+              <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />
+            </label>
+            <button type="button" className="btn btn-sm" disabled={hygieneBusy || !botId} onClick={() => void previewHygiene()}>
+              {hygieneBusy ? '体检中…' : '知识体检'}
+            </button>
             <button type="button" className="btn btn-sm btn-ghost" onClick={docs.reload}>刷新</button>
           </div>
         </header>
         <div className="panel-body flush">
+          {hygienePreview || hygieneNotice !== '' ? (
+            <div className="panel-pad">
+              <div className={'note ' + (hygienePreview ? 'note-pending' : 'note-ok')}>
+                <span className="note-title">
+                  {hygienePreview
+                    ? '知识体检：待归档 ' + hygienePreview.archive.length + ' 篇，待清理 ' + hygienePreview.purge.length + ' 篇'
+                    : hygieneNotice}
+                </span>
+                {hygienePreview ? (
+                  <span className="note-text">
+                    只清理「置信度低 + 召回少」且非常驻的知识；群规/群友写的（pinned）永远不动。
+                    {hygienePreview.archive.slice(0, 5).map((item) => '・' + item.title + '（' + item.reason + '）').join(' ')}
+                  </span>
+                ) : null}
+                {hygienePreview ? (
+                  <>
+                    <button type="button" className="btn btn-sm btn-primary" disabled={hygieneBusy} onClick={() => void applyHygiene()}>
+                      {hygieneBusy ? '执行中…' : '执行归档'}
+                    </button>
+                    <button type="button" className="btn btn-sm btn-ghost" disabled={hygieneBusy} onClick={() => setHygienePreview(null)}>关闭</button>
+                  </>
+                ) : (
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => setHygieneNotice('')}>关闭</button>
+                )}
+              </div>
+            </div>
+          ) : null}
           {docsError && !docsError.unimplemented && !docs.data ? (
             <div className="panel-pad"><ErrorNote error={docsError} onRetry={docs.reload} /></div>
           ) : docsError?.unimplemented ? (
@@ -540,25 +700,94 @@ export function KnowledgePage() {
             <span className="hint-label">说明</span>
             <span className="hint-text">
               原文不存库，打开时按分块拼回（块边界可能有少量重叠）；保存后以这里的文本为准重建分块。
-              改标题不改 source，重复入库仍会命中同一篇文档。
+              改标题不改 source，重复入库仍会命中同一篇文档。常驻 / 群规类不参与自动清理。
             </span>
           </div>
           <Field label="标题" htmlFor="kb-edit-title">
             <input
               id="kb-edit-title"
               className="input"
-              value={editTitle}
-              placeholder="文档标题"
-              onChange={(event) => setEditTitle(event.target.value)}
+              value={editForm.title}
+              placeholder="例如：梗｜曼波 → 曼神"
+              onChange={(event) => setEditForm({ ...editForm, title: event.target.value })}
             />
           </Field>
+          <div className="form-row">
+            <Field label="分类" htmlFor="kb-edit-kind">
+              <select
+                id="kb-edit-kind"
+                className="input"
+                value={editForm.kind}
+                onChange={(event) => setEditForm({ ...editForm, kind: event.target.value })}
+              >
+                {Object.entries(KB_KIND_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </Field>
+            <Field label="来源权威" htmlFor="kb-edit-authority">
+              <select
+                id="kb-edit-authority"
+                className="input"
+                value={editForm.authority}
+                onChange={(event) => setEditForm({ ...editForm, authority: event.target.value })}
+              >
+                {Object.entries(KB_AUTHORITY_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div className="form-row">
+            <Field label="置信度（0-100）" htmlFor="kb-edit-confidence" help="低于阈值 + 召回少才会进入清理候选">
+              <input
+                id="kb-edit-confidence"
+                className="input"
+                type="number"
+                min={0}
+                max={100}
+                value={editForm.confidence}
+                onChange={(event) => setEditForm({ ...editForm, confidence: Number(event.target.value) })}
+              />
+            </Field>
+            <Field label="保护位" htmlFor="kb-edit-pinned" help="常驻：每轮注入，且永不自动清理">
+              <label className="check">
+                <input
+                  id="kb-edit-pinned"
+                  type="checkbox"
+                  checked={editForm.pinned}
+                  onChange={(event) => setEditForm({ ...editForm, pinned: event.target.checked })}
+                />
+                <span className="check-box" aria-hidden="true" />
+                <span className="muted">设为常驻知识</span>
+              </label>
+            </Field>
+          </div>
+          {editForm.kind === 'lookup' ? (
+            <div className="form-row">
+              <Field label="来源 URL" htmlFor="kb-edit-source-url" help="查证类必填，方便判断时效">
+                <input
+                  id="kb-edit-source-url"
+                  className="input mono"
+                  value={editForm.sourceUrl}
+                  placeholder="https://…"
+                  onChange={(event) => setEditForm({ ...editForm, sourceUrl: event.target.value })}
+                />
+              </Field>
+              <Field label="抓取时间" htmlFor="kb-edit-fetched-at">
+                <input
+                  id="kb-edit-fetched-at"
+                  className="input mono"
+                  value={editForm.fetchedAt}
+                  placeholder="2026-11-16"
+                  onChange={(event) => setEditForm({ ...editForm, fetchedAt: event.target.value })}
+                />
+              </Field>
+            </div>
+          ) : null}
           <Field label="内容（Markdown / 纯文本）" htmlFor="kb-edit-text" required wide>
             <textarea
               id="kb-edit-text"
               className="input textarea mono kb-textarea"
               rows={14}
-              value={editText}
-              onChange={(event) => setEditText(event.target.value)}
+              value={editForm.text}
+              onChange={(event) => setEditForm({ ...editForm, text: event.target.value })}
             />
           </Field>
           {editError ? (
