@@ -26,9 +26,47 @@ cat ~/.dsh-qqbot/v2/console-token.txt        # → http://127.0.0.1:6198
 ```
 
 1. 控制台「机器人」页新建机器人，填 QQ 开放平台的 `appId` / `appSecret`，保存后启动；
-2. 在 QQ 里 @ 机器人或私聊发一句，确认链路通了；
-3. 想调人设、回复策略、工具与技能，去「配置档」页；想给某个群单独一套策略，
+2. **先放行自己**：默认 `allowlist` 且名单为空 —— 谁都不理。在 QQ 里私聊或 @ 机器人发一句，
+   日志会打印 `访问控制拦截（私聊）：openid=XXX …`，把这个 openid 填进部署配置的
+   `access.c2cAllow`（私聊）或 `access.groupAllow`（群，填**群** openid），重启 dsh；
+3. 再发一句，确认链路通了（详见 [访问控制](#访问控制谁能触发机器人)）；
+4. 想调人设、回复策略、工具与技能，去「配置档」页；想给某个群单独一套策略，
    在「机器人 → 详情 → 配置档绑定」里按 scope 绑定。
+
+## 访问控制（谁能触发机器人）
+
+聊天桥接的默认必须是**拒绝**：装上并填好凭据之后，任何能给机器人发私聊、或在群里 @ 它的人，
+都能驱动这台机器上的 agent。所以默认值如下，要放开得自己写：
+
+| 配置项 | 默认 | 含义 |
+| --- | --- | --- |
+| `access.c2cMode` | `allowlist` | 私聊：只有 `c2cAllow` 里的 openid 会被处理 |
+| `access.groupMode` | `allowlist` | 群聊：只有 `groupAllow` 里的**群 openid** 会被处理 |
+| `access.c2cAllow` / `groupAllow` | `[]` | 空名单 = 谁都不理 |
+| `access.*` 另两个取值 | `open` / `disabled` | `open` 放行所有人（启动时会 warn），`disabled` 全拒 |
+
+在 profile 的 patch 里配置（`dsh plugin --profile <name> ...` 对应的 `cordis.patch.yml`）：
+
+```yaml
+- insert:
+    - id: qqbot-buddy
+      name: dsh-qqbot-buddy
+      config:
+        access:
+          c2cMode: allowlist
+          c2cAllow:
+            - 'YOUR_C2C_OPENID'      # 私聊：对方 openid
+          groupMode: allowlist
+          groupAllow:
+            - 'GROUP_OPENID'         # 群聊：群 openid，不是群号
+```
+
+**openid 从哪来**：被拦截时日志会直接打印（同一个 openid 每进程只提示一次），
+也可以在控制台「消息流水」里看——群消息在门控前就已落库，不受白名单影响。
+
+> 放行之后，能进到 agent 的人还能用宿主工具。工具侧的开关是配置档里的
+> `tools.mode` / `tools.allow` / `tools.deny`（见「工具与技能」一节），
+> 白名单为空时**不拦任何工具**——对外开放前请一并收窄。
 
 ## 功能特性
 
@@ -53,16 +91,38 @@ cat ~/.dsh-qqbot/v2/console-token.txt        # → http://127.0.0.1:6198
 
 ## 界面预览
 
-README 保持纯文本（npm 上的说明也不需要图），控制台实拍截图集中放在
-[界面预览（docs/SCREENSHOTS.md）](https://github.com/Ethereal-ljq/dsh-qqbot-buddy/blob/v2/docs/SCREENSHOTS.md)：
+控制台随插件进程一起启动（默认 `127.0.0.1:6198`，token 登录，SSE 实时刷新）。
+下面几张是 `1.0.1-alpha.3` 实跑实例的实拍：
 
-- **总览**：机器人运行状态、工具档位、配置规模、SSE 事件流与最近事件；
-- **配置档**：15 个设置分节收敛成 5 个组 tab（对话与人设 / 模型与语音 / 能力与权限 / 记忆与数据 / 群日报）；
-- **提示词预览**：按真实顺序看每一段来源、范围与字符数；
-- **工具与技能**：宿主发现清单、装配三态、常驻 / 按需档位、白名单与黑名单；
-- **模型中心**：LLM / 视觉 / 语音（TTS）/ 语音识别（ASR）/ 更多类型插槽；
-- **群日报模板**：内置模板 + 自定义模板的实时预览与氛围切换；
-- **记忆与知识库**、**深色主题**、dsh Web 会话菜单入口。
+**总览**：机器人运行状态、工具档位（常驻 / 按需）、配置规模、SSE 事件流与最近事件。
+
+![控制台总览](docs/images/preview-overview.png)
+
+**配置档**：15 个设置分节收敛成 5 个组 tab（对话与人设 / 模型与语音 / 能力与权限 / 记忆与数据 / 群日报），
+组内按分节堆叠；作用域绑定在「机器人 → 详情」里做。
+
+![配置档](docs/images/preview-profiles.png)
+
+**工具与技能**：宿主发现清单、装配三态（每轮发送 / 待唤醒 / 不可用）、常驻 / 按需档位、白名单与黑名单，
+支持刷新发现、清理失效条目、按能力组查看。
+
+![工具与技能](docs/images/preview-tools.png)
+
+**模型中心**：LLM / 视觉 / 语音（TTS）/ 语音识别（ASR）/ 更多类型插槽；LLM 路由按配置档生效，
+TTS / ASR 供应商是全局配置、配置档只选用哪个。
+
+![模型中心](docs/images/preview-models.png)
+
+**群日报**：左列模板清单（内置 + 自定义），右侧用示例数据真实渲染卡片；可切氛围、放大预览、一键应用。
+
+![群日报模板](docs/images/preview-reports.png)
+
+**知识库**：分类 / 置信度 / 召回 / 保护位，FTS5 trigram + LIKE 双通道，支持「知识体检」与归档恢复。
+
+![知识库](docs/images/preview-knowledge.png)
+
+更多截图（提示词预览、模型中心、记忆、群友库、人格卡、表情包、深色主题、dsh Web 会话菜单入口）
+见 [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)。
 
 群日报卡片的做法：模板就是一个读 `window.__CARD_DATA__` 的 `index.html`，随包自带 `minimal` 最简示例；
 声明了 `visuals` 的模板还能按当天氛围自动换插画（素材由模板自己的 `meta.json` 声明，渲染前内联成 data URI），

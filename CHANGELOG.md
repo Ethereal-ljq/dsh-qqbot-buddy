@@ -2,6 +2,20 @@
 
 本项目遵循语义化版本；当前处于 `1.0.0` 的预发布阶段。发布先落 `next`，验收通过后提升 `latest`。
 
+## 1.0.1-alpha.3（2026-11-17，仅本地 commit，未发布）
+
+### 破坏性变更：访问控制默认拒绝
+
+- `access.c2cMode` / `access.groupMode` 的默认值由 `open` 改为 `allowlist`，白名单为空即不放行任何人；
+  中间件在缺配置时的回退值也一并改为 `allowlist`。**升级后机器人默认不再回应任何人**，
+  需要先把 openid 填进 `access.c2cAllow` / `access.groupAllow`（群填**群** openid）。
+- 被拦截时日志打印对方 openid 与应填字段，同一 openid 每进程只提示一次；
+  显式配置为 `open` 时启动 warn「任何能私聊或在群里 @ 机器人的人都可以驱动本机 agent」。
+- README 新增「访问控制（谁能触发机器人）」一节，含配置示例与 openid 获取方式。
+- 新增 `test/access-defaults.test.js`：锁住 schema 默认值、中间件回退值、拦截日志。
+- README「界面预览」改为内嵌控制台实拍截图（总览 / 配置档 / 工具与技能 / 群日报 / 知识库），
+  图片放在 `docs/images/preview-*.png`。
+
 ## 1.0.1-alpha.2（2026-11-16，仅本地 commit，未发布）
 
 ### 新增：知识库分类 / 置信度 / 治理（可调阈值）
