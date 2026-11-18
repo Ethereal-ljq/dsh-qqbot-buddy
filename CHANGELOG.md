@@ -16,6 +16,16 @@
 - README「界面预览」改为内嵌控制台实拍截图（总览 / 配置档 / 工具与技能 / 群日报 / 知识库），
   图片放在 `docs/images/preview-*.png`。
 
+## 1.0.1-alpha.4（2026-11-18，仅本地 commit，未发布）
+
+### 修复
+
+- 工具页「每轮发送 + 未放行」假矛盾：兼容别名（`qqbot_send_image → qqbot_send_file`、
+  `qqbot_send_emote → qqbot_send_sticker`、`qqbot_save_emote → qqbot_sticker_save`）与正名共享放行权限，
+  旧勾选逻辑只按字面名字判断，导致正名放行、别名已声明却显示未放行。现在 API 返回 `aliasOf/related/force`，
+  勾选按 related 集合判断、写策略只记正名；元工具 `qqbot_enable` 显示为「已放行（锁定）」。
+- README 内嵌截图后的清单测试改为「相对路径 + 文件存在」（与 2026-11-18 README 改版一致）。
+
 ## 1.0.1-alpha.2（2026-11-16，仅本地 commit，未发布）
 
 ### 新增：知识库分类 / 置信度 / 治理（可调阈值）

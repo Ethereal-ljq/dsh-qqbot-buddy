@@ -306,6 +306,9 @@ function normToolItem(raw: unknown): ToolItem {
     declared: val(r, 'declared') === undefined || val(r, 'declared') === null ? null : bool(val(r, 'declared')),
     indexed: val(r, 'indexed') === undefined || val(r, 'indexed') === null ? null : bool(val(r, 'indexed')),
     reason: val(r, 'reason') === undefined ? undefined : str(val(r, 'reason')),
+    aliasOf: val(r, 'aliasOf') === undefined || val(r, 'aliasOf') === null || val(r, 'aliasOf') === '' ? null : str(val(r, 'aliasOf')),
+    related: Array.isArray(val(r, 'related')) ? (val(r, 'related') as unknown[]).map((name) => str(name)).filter((name) => name !== '') : undefined,
+    force: bool(val(r, 'force'), false),
   };
 }
 

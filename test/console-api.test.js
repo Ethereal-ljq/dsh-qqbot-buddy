@@ -271,6 +271,8 @@ test('tools 发现项注入 deps.toolsDiscover 后可见', async (t) => {
         list: () => [
           { name: 'bash', source: 'host', description: '运行 shell 命令' },
           { name: 'custom', source: 'plugin', description: '插件工具', restrictable: false },
+          { name: 'qqbot_send_image', source: 'qqbot', description: '发图片（别名）' },
+          { name: 'qqbot_enable', source: 'qqbot', description: '开启被动能力' },
         ],
         visibleNames: () => ['bash'],
       },
@@ -281,19 +283,26 @@ test('tools 发现项注入 deps.toolsDiscover 后可见', async (t) => {
 
   const tools = await h.request('GET', '/api/tools');
   assert.equal(tools.status, 200);
-  assert.equal(tools.data.items.length, 2);
+  assert.equal(tools.data.items.length, 4);
   assert.deepEqual(tools.data.items[0], {
     name: 'bash', source: 'host', description: '运行 shell 命令', restrictable: true,
     // capability 现在由 catalog 反查（控制台三态要用它判断模块是否装配）
     capability: 'shell', tier: 'passive', group: 'shell', classified: true,
+    aliasOf: null, related: ['bash'], force: false,
     // 没指定 profile → 没有生效设置，三态标 unknown 而不是瞎猜
     state: 'unknown', loaded: null, declared: null, indexed: null,
   });
   assert.equal(tools.data.items[1].restrictable, false);
   assert.equal(tools.data.items[1].tier, 'active', '未登记的宿主工具默认常驻');
   assert.equal(tools.data.items[1].classified, false, '未登记要标「未分类」');
+  // 兼容别名：控制台按 related 集合判断放行，避免「每轮发送却显示未放行」
+  const alias = tools.data.items.find((item) => item.name === 'qqbot_send_image');
+  assert.equal(alias.aliasOf, 'qqbot_send_file');
+  assert.deepEqual(alias.related, ['qqbot_send_image', 'qqbot_send_file']);
+  // 元工具：force 注册，白名单拦不住（只有黑名单能屏蔽）
+  assert.equal(tools.data.items.find((item) => item.name === 'qqbot_enable').force, true);
   assert.deepEqual(tools.data.visible, ['bash']);
-  assert.deepEqual(tools.data.stateSummary, { declared: 0, indexed: 0, disabled: 0, unknown: 2 });
+  assert.deepEqual(tools.data.stateSummary, { declared: 0, indexed: 0, disabled: 0, unknown: 4 });
   assert.equal(tools.data.preset, null, '没有 profile 时不给 preset');
 });
 

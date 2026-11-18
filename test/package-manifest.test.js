@@ -90,9 +90,13 @@ test('cordis.patch.yml：bundle 声明与插件入口一致', () => {
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml');
 });
 
-test('README：不内嵌图片，截图集中在 docs/SCREENSHOTS.md', () => {
+test('README 内嵌截图：仓库相对路径且文件存在；更多截图集中在 docs/SCREENSHOTS.md', () => {
+  // 2026-11-18 起 README 内嵌控制台实拍（GitHub 渲染用）；约束只剩「相对路径 + 文件存在」。
   const images = [...readme.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((match) => match[1]);
-  assert.deepEqual(images, [], 'README 保持纯文本：内嵌图片对 npm 页面没有意义，也拖慢加载');
+  for (const ref of images) {
+    assert.ok(!/^https?:\/\//.test(ref), 'README 图片用仓库相对路径: ' + ref);
+    assert.ok(fs.existsSync(path.join(ROOT, ref)), 'README 截图不存在: ' + ref);
+  }
 
   const shots = fs.readFileSync(path.join(ROOT, 'docs', 'SCREENSHOTS.md'), 'utf8');
   const refs = [...shots.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((match) => match[1]);

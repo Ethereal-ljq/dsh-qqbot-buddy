@@ -174,6 +174,12 @@ export interface ToolItem {
   indexed?: boolean | null;
   /** 不可用/未声明的原因（tooltip 用）。 */
   reason?: string;
+  /** 兼容别名指向的正名（如 qqbot_send_image → qqbot_send_file） */
+  aliasOf?: string | null;
+  /** 与本工具共享权限的名字集合（正名 + 别名） */
+  related?: string[];
+  /** 元工具（force 注册，白名单拦不住，只有黑名单能屏蔽） */
+  force?: boolean;
 }
 
 export interface ToolPolicy {

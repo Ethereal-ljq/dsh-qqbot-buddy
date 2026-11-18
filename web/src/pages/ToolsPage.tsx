@@ -32,6 +32,17 @@ type ToolFilter = 'all' | 'declared' | 'indexed' | 'disabled' | 'unclassified';
 type ToolView = 'list' | 'groups';
 
 /** 某行的生效档位（覆盖优先，其次后端算好的默认档位）。 */
+/** 放宽/屏蔽判定用：别名与正名共享权限，按 related 集合判断。 */
+function relatedNamesOf(item: ToolItem): string[] {
+  if (Array.isArray(item.related) && item.related.length > 0) return item.related;
+  return [item.name];
+}
+
+/** 写入策略时只写正名（别名不落库，保持白名单干净）。 */
+function policyNameOf(item: ToolItem): string {
+  return item.aliasOf || item.name;
+}
+
 function effectiveTier(item: ToolItem, draft: ToolPolicy | null): 'active' | 'passive' {
   const override = draft?.tiers?.[item.name];
   if (override === 'active' || override === 'passive') return override;
@@ -181,20 +192,24 @@ export function ToolsPage() {
   const toolAllowFallback = toolsDraft?.mode === 'allow' && toolsDraft.allow.length === 0;
   const skillAllowFallback = skillsDraft?.mode !== 'all' && (skillsDraft?.allow.length ?? 0) === 0;
 
-  const toggleTool = (name: string, list: 'allow' | 'deny') => {
+  const toggleTool = (item: ToolItem, list: 'allow' | 'deny') => {
+    const related = relatedNamesOf(item);
+    const canonical = policyNameOf(item);
     setToolsDraft((prev) => {
       if (!prev) return prev;
       // 白名单为空 = 按能力开关放行；此时勾选/取消要以"当前可见集合"为基准，
       // 否则随便勾一个就会把其它工具全部挡掉（旧行为）。
       if (list === 'allow' && prev.mode === 'allow' && prev.allow.length === 0) {
-        const base = new Set(visibleNames ? [...visibleNames] : (tools.data?.items ?? []).map((item) => item.name));
-        if (base.has(name)) base.delete(name);
-        else base.add(name);
+        const base = new Set(visibleNames ? [...visibleNames] : (tools.data?.items ?? []).map((entry) => entry.name));
+        const present = related.some((name) => base.has(name));
+        if (present) related.forEach((name) => base.delete(name));
+        else base.add(canonical);
         return { ...prev, allow: [...base] };
       }
       const current = new Set(prev[list]);
-      if (current.has(name)) current.delete(name);
-      else current.add(name);
+      const present = related.some((name) => current.has(name));
+      if (present) related.forEach((name) => current.delete(name));
+      else current.add(canonical);
       return { ...prev, [list]: [...current] };
     });
   };
@@ -389,6 +404,9 @@ export function ToolsPage() {
         <div className="cell-stack">
           <span className="cell-inline">
             <span className="mono cell-title">{item.name}</span>
+            {item.aliasOf ? (
+              <span className="badge idle" title={'兼容别名：与 ' + item.aliasOf + ' 共享放行/屏蔽权限'}>别名 → {item.aliasOf}</span>
+            ) : null}
             {item.classified === false ? <span className="badge warn" title="catalog 未登记档位，默认按「常驻」处理">未分类</span> : null}
             <SourceTag source={item.source} />
           </span>
@@ -445,22 +463,31 @@ export function ToolsPage() {
       render: (item) => {
         const usingDeny = toolsDraft?.mode === 'deny';
         const list = usingDeny ? 'deny' : 'allow';
+        const related = relatedNamesOf(item);
         const fallback = !usingDeny && (toolsDraft?.allow.length ?? 0) === 0;
-        const inList = toolsDraft ? toolsDraft[list].includes(item.name) : false;
-        // 白名单为空时后端按能力开关放行：勾选态直接反映"当前是否生效可见"
-        const checked = fallback ? Boolean(visibleNames?.has(item.name)) : inList;
-        const disabled = !toolsDraft;
-        const title = fallback
-          ? '白名单为空：当前按能力开关放行；勾选/取消会以当前可见集合为基准生成白名单'
-          : (usingDeny ? '勾选 = 屏蔽该工具' : '勾选 = 放行该工具');
+        // 别名与正名共享权限：只要 related 里任一名字在列表内就算放行，
+        // 否则会出现「每轮发送（因为正名放行了）却显示未放行」的假矛盾。
+        const inList = toolsDraft ? related.some((name) => toolsDraft[list].includes(name)) : false;
+        const visibleNow = related.some((name) => Boolean(visibleNames?.has(name)));
+        const checked = fallback ? visibleNow : inList;
+        // 元工具 force 注册：白名单拦不住它，只有黑名单能屏蔽 → 显示为「已放行（锁定）」
+        const forceLocked = !usingDeny && item.force === true;
+        const disabled = !toolsDraft || forceLocked;
+        const title = forceLocked
+          ? '元工具 qqbot_enable：白名单不拦它（只有黑名单能屏蔽）'
+          : fallback
+            ? '白名单为空：当前按能力开关放行；勾选/取消会以当前可见集合为基准生成白名单'
+            : item.aliasOf
+              ? '兼容别名：与 ' + item.aliasOf + ' 共享放行/屏蔽状态（写策略时只记正名）'
+              : (usingDeny ? '勾选 = 屏蔽该工具' : '勾选 = 放行该工具');
         return (
-          <label className={'check' + (disabled ? ' disabled' : '')} title={title}>
+          <label className={'check' + (disabled && !forceLocked ? ' disabled' : '')} title={title}>
             <input
               type="checkbox"
-              checked={checked}
+              checked={forceLocked ? true : checked}
               disabled={disabled}
-              onChange={() => toggleTool(item.name, list)}
-              aria-label={(usingDeny ? '屏蔽 ' : '放行 ') + item.name}
+              onChange={() => toggleTool(item, list)}
+              aria-label={(usingDeny ? '屏蔽 ' : '放行 ') + item.name + (item.aliasOf ? '（别名，跟 ' + item.aliasOf + ' 同步）' : '')}
             />
             <span className="check-box" aria-hidden="true" />
           </label>
