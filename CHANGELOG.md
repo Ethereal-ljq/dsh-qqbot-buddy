@@ -2,6 +2,32 @@
 
 本项目遵循语义化版本；当前处于 `1.0.0` 的预发布阶段。发布先落 `next`，验收通过后提升 `latest`。
 
+## 1.0.1-alpha.5（2026-11-21，仅本地 commit，未发布）
+
+### 修复：推理模型吃满预算导致群日报「模型未返回文本」
+
+- 现象：11-19、11-20 的日报在 `daily_reports` 里是 `failed`，error=`模型未返回文本`；
+  定时 23:30 到点、模型也调了，但群里一条都没发。
+- 复现：用同一天的真实 transcript 直接打 `opencode-go / deepseek-v4.1-flash`，
+  `max_tokens=1600` 时 `finish_reason=length`、`completion_tokens=1600` 全部算作
+  `reasoning_tokens`、正文长度 0；把预算提到 4096 后 `finish_reason=stop`、正文是合法 JSON。
+  也就是说「模型未返回文本」不是网络问题，而是推理把 token 预算烧完了。
+- 修复：日报预算 `1600 → 4096`（`REPORT_MAX_TOKENS`），遇到「无正文」自动翻倍重试一次（8192），
+  与 `tools/vision.js` 里已有的兜底策略一致；其它错误（鉴权/网络）不重试。
+- 修复：日报生成失败过去只落库不打印，日志里看不出「今天没日报」；现在失败会 `warn`
+  一条 `群日报生成失败 <日期>：<原因>`。
+- 新增：`/daily [YYYY-MM-DD|昨天|前天]` 可以补跑漏掉的某一天（发到当前会话，不走主动消息）。
+
+## 1.0.1-alpha.4（2026-11-18，仅本地 commit，未发布）
+
+### 修复
+
+- 工具页「每轮发送 + 未放行」假矛盾：兼容别名（`qqbot_send_image → qqbot_send_file`、
+  `qqbot_send_emote → qqbot_send_sticker`、`qqbot_save_emote → qqbot_sticker_save`）与正名共享放行权限，
+  旧勾选逻辑只按字面名字判断，导致正名放行、别名已声明却显示未放行。现在 API 返回 `aliasOf/related/force`，
+  勾选按 related 集合判断、写策略只记正名；元工具 `qqbot_enable` 显示为「已放行（锁定）」。
+- README 内嵌截图后的清单测试改为「相对路径 + 文件存在」（与 2026-11-18 README 改版一致）。
+
 ## 1.0.1-alpha.3（2026-11-17，仅本地 commit，未发布）
 
 ### 破坏性变更：访问控制默认拒绝
@@ -15,16 +41,6 @@
 - 新增 `test/access-defaults.test.js`：锁住 schema 默认值、中间件回退值、拦截日志。
 - README「界面预览」改为内嵌控制台实拍截图（总览 / 配置档 / 工具与技能 / 群日报 / 知识库），
   图片放在 `docs/images/preview-*.png`。
-
-## 1.0.1-alpha.4（2026-11-18，仅本地 commit，未发布）
-
-### 修复
-
-- 工具页「每轮发送 + 未放行」假矛盾：兼容别名（`qqbot_send_image → qqbot_send_file`、
-  `qqbot_send_emote → qqbot_send_sticker`、`qqbot_save_emote → qqbot_sticker_save`）与正名共享放行权限，
-  旧勾选逻辑只按字面名字判断，导致正名放行、别名已声明却显示未放行。现在 API 返回 `aliasOf/related/force`，
-  勾选按 related 集合判断、写策略只记正名；元工具 `qqbot_enable` 显示为「已放行（锁定）」。
-- README 内嵌截图后的清单测试改为「相对路径 + 文件存在」（与 2026-11-18 README 改版一致）。
 
 ## 1.0.1-alpha.2（2026-11-16，仅本地 commit，未发布）
 

@@ -6,9 +6,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   COMMAND_CATALOG,
+  INVALID_DAY,
   adminStatus,
   createCommandMiddleware,
   handleCommand,
+  parseDailyDay,
 } from '../lib/qq/commands.js';
 
 // /heal 会重新挂载会话工具（有副作用），与管理命令同属 adminOnly
@@ -91,7 +93,8 @@ test('COMMAND_CATALOG：包含 13 条命令，字段完整，adminOnly 与 DESIG
     ['help', 'ping', 'status', 'id', 'tools', 'skills', 'daily', 'heal', 'new', 'reset', 'clear', 'resume', 'stop']);
   for (const item of COMMAND_CATALOG) {
     assert.equal(typeof item.name, 'string');
-    assert.equal(item.usage, '/' + item.name);
+    // usage 允许带参数（如 /daily [YYYY-MM-DD|昨天|前天]），至少要以命令名开头
+    assert.ok(item.usage.startsWith('/' + item.name), 'usage 要以命令名开头: ' + item.usage);
     assert.equal(typeof item.description, 'string');
     assert.ok(item.description.length > 0);
     assert.equal(typeof item.adminOnly, 'boolean');
@@ -442,4 +445,46 @@ test('adminStatus：只按 openid 判定，昵称不再生效（防冒充）', a
   // 只配 names 视为未配置 -> 不强制门控（保持旧行为）
   const namesOnly = { admin: { enabled: true, openids: [], names: ['小明'] } };
   assert.equal(adminStatus(namesOnly, 'OTHER', '小明').enforced, false);
+});
+test('/daily 日期参数：空=今天、YYYY-MM-DD、昨天/前天，看不懂返回 INVALID_DAY', () => {
+  assert.equal(parseDailyDay(''), null);
+  assert.equal(parseDailyDay('   '), null);
+  assert.equal(parseDailyDay('2026-11-20'), '2026-11-20');
+  const now = new Date();
+  const expect = (offset) => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - offset);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  };
+  assert.equal(parseDailyDay('昨天'), expect(1));
+  assert.equal(parseDailyDay('前天'), expect(2));
+  assert.equal(parseDailyDay('今天'), expect(0));
+  assert.equal(parseDailyDay('上周'), INVALID_DAY);
+});
+
+test('/daily 带日期时把 day 传给 generateNow；看不懂的日期只回提示、不生成', async () => {
+  const calls = [];
+  const daily = { generateNow: async (args) => { calls.push(args); return { ok: true, text: '日报正文' }; } };
+  const base = {
+    name: 'daily', ctx: { replyTarget: null }, scope: 'group', peerId: 'G1',
+    settings: makeSettings({ admin: { enabled: false } }), daily, botId: 'b1',
+  };
+  assert.equal(await handleCommand({ ...base, args: '2026-11-20' }), '日报正文');
+  assert.equal(calls[0].day, '2026-11-20');
+  assert.equal(calls[0].send, false, '手动生成走被动回复，不用主动消息');
+  assert.equal(calls[0].force, true);
+
+  await handleCommand({ ...base, args: '' });
+  assert.equal('day' in calls[1], false, '不填日期时不传 day，交给 generateNow 用今天');
+
+  const text = await handleCommand({ ...base, args: '上周' });
+  assert.match(text, /日期看不懂/);
+  assert.equal(calls.length, 2, '看不懂的日期不应该触发模型');
+});
+
+test('generateDaily 场景：旧的 1600 预算下推理模型只思考不产出，已改为更大预算重试', async () => {
+  // 这条锁住回归：REPORT_MAX_TOKENS 必须显著大于 1600（实测 1600 全进 reasoning_tokens）
+  const mod = await import('../lib/reports/daily.js');
+  assert.ok(mod.REPORT_MAX_TOKENS >= 4096);
+  assert.ok(mod.REPORT_MAX_TOKENS_RETRY > mod.REPORT_MAX_TOKENS);
 });

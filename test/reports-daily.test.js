@@ -10,6 +10,7 @@ import test from 'node:test';
 import { closeDb, migrate, openDb } from '../lib/core/db.js';
 import { createReportStore } from '../lib/core/reports/store.js';
 import {
+  REPORT_MAX_TOKENS, REPORT_MAX_TOKENS_RETRY,
   buildPrompt, buildStats, buildTranscript, dayBounds, extractJson, generateDaily, localDay,
   renderText, sanitizeReport, selectSample,
 } from '../lib/reports/daily.js';
@@ -193,6 +194,53 @@ test('generateDaily：低于阈值 → skipped；成功 → done + 文本；重�
   const reused = await generateDaily({ flow: flow2, reports, oneShot, botId: 'b1', peer: 'group:G1', day, settings: { daily: { minMessages: 20 } } });
   assert.equal(reused.reused, true);
   assert.equal(calls, 1, '已有 done 报告时不应重复调用模型');
+});
+
+test('generateDaily：模型只思考不产出（推理吃满预算）时自动加大预算重试', async (t) => {
+  const reports = setup(t);
+  const day = localDay();
+  const rows = [];
+  for (let i = 0; i < 25; i += 1) rows.push(msg({ messageId: 'm' + i, content: '消息' + i, createdAt: at(10, i) }));
+  const seen = [];
+  const warns = [];
+  const oneShot = {
+    generate: async (args) => {
+      seen.push(args);
+      if (seen.length === 1) return { ok: false, text: '', error: '模型未返回文本' };
+      return { ok: true, text: goodJson('重试成功') };
+    },
+  };
+  const result = await generateDaily({
+    flow: fakeFlow(rows), reports, oneShot, botId: 'b1', peer: 'group:G1', day,
+    settings: { daily: { minMessages: 20 } }, logger: { warn: (m) => warns.push(m) },
+  });
+  assert.equal(seen.length, 2, '无正文时要重试一次');
+  assert.equal(seen[0].maxTokens, REPORT_MAX_TOKENS);
+  assert.equal(seen[1].maxTokens, REPORT_MAX_TOKENS_RETRY);
+  assert.ok(seen[1].maxTokens > seen[0].maxTokens, '重试预算必须更大（推理会继续吃满）');
+  assert.equal(result.ok, true);
+  assert.match(result.text, /重试成功/);
+  assert.equal(warns.length, 1);
+  assert.match(warns[0], /没有正文/);
+});
+
+test('generateDaily：非「无正文」类失败不重试，并写 warn 日志（不再静默）', async (t) => {
+  const reports = setup(t);
+  const day = localDay();
+  const rows = [];
+  for (let i = 0; i < 25; i += 1) rows.push(msg({ messageId: 'm' + i, content: '消息' + i, createdAt: at(10, i) }));
+  const seen = [];
+  const warns = [];
+  const oneShot = { generate: async (args) => { seen.push(args); return { ok: false, text: '', error: '模型调用失败: 401' }; } };
+  const result = await generateDaily({
+    flow: fakeFlow(rows), reports, oneShot, botId: 'b1', peer: 'group:G1', day,
+    settings: { daily: { minMessages: 20 } }, logger: { warn: (m) => warns.push(m) },
+  });
+  assert.equal(seen.length, 1, '鉴权类错误重试无用，不应再打一次模型');
+  assert.equal(result.ok, false);
+  assert.equal(reports.get({ botId: 'b1', peer: 'group:G1', day }).status, 'failed');
+  assert.equal(warns.length, 1);
+  assert.match(warns[0], /群日报生成失败/);
 });
 
 test('generateDaily：forcedMood 覆盖模型 mood，非法值忽略', async (t) => {
