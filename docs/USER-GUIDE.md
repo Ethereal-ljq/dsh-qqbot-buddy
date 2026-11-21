@@ -661,8 +661,12 @@ v2 暂未提供口头禅编辑 UI。v1 → v2 迁移时，旧 `phrases` / `promp
 | `daily.peers` | 空 | 群 openid / `group:<openid>`；留空 = 最近 36h 活跃的所有群 |
 | `daily.minMessages` | 20 | 低于此数跳过（不发空日报） |
 | `daily.maxMessages` | 300 | 送进模型的抽样上限 |
-| `daily.catchUp` | 开 | 错过时间点后 6 小时内补跑 |
+| `daily.maxTokens` | 4096 | 首次请求的**输出 token 预算**（含推理）。推理模型会先思考再写正文，预算太小就只有思考、正文为空（报「模型未返回文本」） |
+| `daily.retryMaxTokens` | 8192 | 首次没有正文时用这个预算重试一次；**≤ 首次预算 = 关闭重试** |
+| `daily.catchUp` | 开 | 错过时间点后 6 小时内补跑（要更晚补用 `/daily 昨天`） |
 | `daily.delivery` | 主动发群 | 主动消息受限时可改「只生成不发送」 |
+| `daily.notifyOnFailure` | 开 | 生成失败时在群里回一条「失败原因 + 补跑命令」，每群每天最多一次（需主动消息权限；「只生成不发送」时不发） |
+| `daily.logRuns` | 开 | 每次运行都写日志：开始（条数 / 样本 / 预算 / 模型）、跳过、完成（字数 / 耗时 / 重试次数）、投递（卡片 / 文本）；失败与投递失败始终写 warn，不受此开关影响 |
 | `daily.template` | `journal` | 卡片模板：`journal` 纸刊暖色 / `dark` 深色数据 / 自定义模板名（`<dataDir>/templates/<名字>/index.html`） / `off` 只发文本 |
 | `daily.visualMode` | `auto` | 插画氛围：`auto` 模型选择（没选按高峰时段）/ `random` 每天随机 / `fixed` 固定指定；仅对声明了插画槽的模板生效 |
 | `daily.visualMood` | 空 | `fixed` 时使用的氛围 id（以模板 `meta.json` 的 `visuals.moods` 为准，例如 lively / calm / night），非法/留空回退 `auto` |

@@ -338,3 +338,65 @@ test('generateDaily：模型失败 → failed；输出全是幻觉引文 → fai
   });
   assert.equal(badOutput.reason, 'bad-output');
 });
+
+test('generateDaily：预算来自配置（daily.maxTokens / retryMaxTokens），并打开始/完成日志', async (t) => {
+  const reports = setup(t);
+  const day = localDay();
+  const rows = [];
+  for (let i = 0; i < 25; i += 1) rows.push(msg({ messageId: 'm' + i, content: '消息' + i, createdAt: at(10, i) }));
+  const seen = [];
+  const info = [];
+  const warns = [];
+  const oneShot = {
+    generate: async (args) => {
+      seen.push(args);
+      if (seen.length === 1) return { ok: false, text: '', error: '模型未返回文本' };
+      return { ok: true, text: goodJson('自定义预算') };
+    },
+  };
+  const result = await generateDaily({
+    flow: fakeFlow(rows), reports, oneShot, botId: 'b1', peer: 'group:G1', day,
+    settings: { daily: { minMessages: 20, maxTokens: 2048, retryMaxTokens: 3072 } },
+    logger: { info: (m) => info.push(m), warn: (m) => warns.push(m) },
+  });
+  assert.deepEqual(seen.map((s) => s.maxTokens), [2048, 3072], '预算必须来自配置，且重试用更大的那个');
+  assert.equal(result.ok, true);
+  assert.ok(info.some((m) => /群日报开始/.test(m) && /预算 2048→3072/.test(m)), '开始日志要带预算');
+  assert.ok(info.some((m) => /群日报完成/.test(m)), '完成日志要有');
+});
+
+test('generateDaily：retry 预算 ≤ 首次预算 = 不重试', async (t) => {
+  const reports = setup(t);
+  const day = localDay();
+  const rows = [];
+  for (let i = 0; i < 25; i += 1) rows.push(msg({ messageId: 'm' + i, content: '消息' + i, createdAt: at(10, i) }));
+  const seen = [];
+  const warns = [];
+  const oneShot = { generate: async (args) => { seen.push(args); return { ok: false, text: '', error: '模型未返回文本' }; } };
+  const result = await generateDaily({
+    flow: fakeFlow(rows), reports, oneShot, botId: 'b1', peer: 'group:G1', day,
+    settings: { daily: { minMessages: 20, maxTokens: 4096, retryMaxTokens: 4096 } },
+    logger: { info: () => {}, warn: (m) => warns.push(m) },
+  });
+  assert.equal(seen.length, 1, '重试预算不大于首次预算时不应该重试');
+  assert.equal(result.ok, false);
+  assert.ok(warns.some((m) => /群日报生成失败/.test(m)), '失败必须 warn');
+});
+
+test('generateDaily：logRuns=false 时不打 info，但失败仍然 warn', async (t) => {
+  const reports = setup(t);
+  const day = localDay();
+  const rows = [];
+  for (let i = 0; i < 25; i += 1) rows.push(msg({ messageId: 'm' + i, content: '消息' + i, createdAt: at(10, i) }));
+  const info = [];
+  const warns = [];
+  const oneShot = { generate: async () => ({ ok: false, text: '', error: '模型调用失败: 401' }) };
+  await generateDaily({
+    flow: fakeFlow(rows), reports, oneShot, botId: 'b1', peer: 'group:G1', day,
+    settings: { daily: { minMessages: 20, logRuns: false } },
+    logger: { info: (m) => info.push(m), warn: (m) => warns.push(m) },
+  });
+  assert.equal(info.length, 0, 'logRuns=false 关闭常规日志');
+  assert.equal(warns.length, 1, '失败日志不受开关影响');
+  assert.match(warns[0], /群日报生成失败/);
+});
